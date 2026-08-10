@@ -1,0 +1,20 @@
+{
+  "status": "success",
+  "data": {
+    "total_quotes": 8,
+    "quotes": [
+      {"ticker": "AGMKP", "company": "<Olmaliq KMK> AJ", "security_code": "UZ700055K015", "closing_price": "16,100", "last_trade_price": "17,000", "change_direction": "up", "change_value": "712.0", "last_trade_date": "10.08.2026"},
+      {"ticker": "KVTS", "company": "<Kvarts> AJ", "security_code": "UZ7025770007", "closing_price": "2,385", "last_trade_price": "3,200", "change_direction": "up", "change_value": "101.0", "last_trade_date": "10.08.2026"},
+      {"ticker": "UZMK", "company": "<O'zmetkombinat> AJ", "security_code": "UZ7021720006", "closing_price": "6,099", "last_trade_price": "6,350", "change_direction": "down", "change_value": "50.0", "last_trade_date": "10.08.2026"},
+      {"ticker": "UTYK", "company": "<O'ztemiryo'lkonteyner> AJ", "security_code": "UZ7051720009", "closing_price": "370,000", "last_trade_price": "351,000", "change_direction": "down", "change_value": "29000.0", "last_trade_date": "10.08.2026"},
+      {"ticker": "UZMT", "company": "<UzAuto Motors> AJ", "security_code": "UZ7003040001", "closing_price": "50,999.99", "last_trade_price": "51,998", "change_direction": "up", "change_value": "8.0", "last_trade_date": "10.08.2026"},
+      {"ticker": "KASU", "company": "<Kapital sug'urta> AJ", "security_code": "UZ7028660007", "closing_price": "0.01", "last_trade_price": "0.01", "change_direction": "", "change_value": "", "last_trade_date": "10.08.2026"},
+      {"ticker": "SANE", "company": "<Sarbon-Neftegaz> AJ", "security_code": "UZ7023760000", "closing_price": "13,000", "last_trade_price": "12,201", "change_direction": "", "change_value": "", "last_trade_date": "05.08.2026"},
+      {"ticker": "KVTS", "company": "<Kvarts> AJ", "security_code": "UZ7025770007", "closing_price": "2,385", "last_trade_price": "3,200", "change_direction": "up", "change_value": "101.0", "last_trade_date": "10.08.2026"}
+    ],
+    "total_recent_trades": 1,
+    "recent_trades": [
+      {"time": "10 авг., 16:02", "security_code": "UZ7058980010UZNF", "issuer": "<UzMIJ> AJ", "security_type": "Простые акции", "market": "STK", "platform": "G1", "trade_price": "5.7", "quantity": "100,000", "volume": "UZS570,000"}
+    ]
+  }
+}

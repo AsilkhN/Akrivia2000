@@ -46,13 +46,14 @@ CREATE TABLE IF NOT EXISTS api_budget (
     PRIMARY KEY (provider, month)
 );
 
--- The full UZSE snapshot, kept so that one paid request serves the whole day:
--- the daily report, every /now, every /add validation and every /ai.
-CREATE TABLE IF NOT EXISTS uzse_snapshot (
-    id           INTEGER PRIMARY KEY CHECK (id = 1),
+-- Raw parse.bot responses, so one paid request serves the whole day: the
+-- daily report, every /now, every /add validation and every /ai. Keyed by
+-- endpoint ('quotes', 'securities', 'detail:KVTS').
+CREATE TABLE IF NOT EXISTS uzse_cache (
+    key          TEXT PRIMARY KEY,
     payload      TEXT NOT NULL,        -- raw JSON exactly as the scraper returned it
     fetched_at   TEXT NOT NULL,        -- UTC timestamp of the paid request
-    session_date TEXT                  -- trading date the snapshot describes
+    session_date TEXT                  -- trading date the response describes
 );
 
 -- Price history for UZSE, accumulated from the daily snapshots. The scraper
@@ -249,20 +250,21 @@ class Storage:
 
     # -- UZSE snapshot cache -------------------------------------------------
 
-    def save_snapshot(self, payload: str, session_date: str | None) -> None:
+    def save_cache(self, key: str, payload: str, session_date: str | None) -> None:
         self._conn.execute(
-            "INSERT INTO uzse_snapshot (id, payload, fetched_at, session_date) "
-            "VALUES (1, ?, datetime('now'), ?) "
-            "ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, "
+            "INSERT INTO uzse_cache (key, payload, fetched_at, session_date) "
+            "VALUES (?, ?, datetime('now'), ?) "
+            "ON CONFLICT(key) DO UPDATE SET payload = excluded.payload, "
             "fetched_at = excluded.fetched_at, session_date = excluded.session_date",
-            (payload, session_date),
+            (key, payload, session_date),
         )
         self._conn.commit()
 
-    def load_snapshot(self) -> tuple[str, str, str | None] | None:
-        """Return (payload, fetched_at, session_date) of the cached snapshot."""
+    def load_cache(self, key: str) -> tuple[str, str, str | None] | None:
+        """Return (payload, fetched_at, session_date) for a cached response."""
         row = self._conn.execute(
-            "SELECT payload, fetched_at, session_date FROM uzse_snapshot WHERE id = 1"
+            "SELECT payload, fetched_at, session_date FROM uzse_cache WHERE key = ?",
+            (key,),
         ).fetchone()
         if row is None:
             return None
@@ -274,6 +276,15 @@ class Storage:
             "INSERT INTO uzse_history (ticker, session_date, price) VALUES (?, ?, ?) "
             "ON CONFLICT(ticker, session_date) DO UPDATE SET price = excluded.price",
             [(ticker, session_date, price) for ticker, price in prices.items()],
+        )
+        self._conn.commit()
+
+    def save_history_series(self, ticker: str, history: dict[str, float]) -> None:
+        """Store many sessions for one ticker, as returned by the detail endpoint."""
+        self._conn.executemany(
+            "INSERT INTO uzse_history (ticker, session_date, price) VALUES (?, ?, ?) "
+            "ON CONFLICT(ticker, session_date) DO UPDATE SET price = excluded.price",
+            [(ticker.upper(), session, price) for session, price in history.items()],
         )
         self._conn.commit()
 

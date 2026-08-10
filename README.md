@@ -48,21 +48,43 @@ US stocks come from Yahoo Finance (no key, no quota). Uzbek stocks come from a
 The bot never mixes them: separate sections, separate currencies, separate
 trading calendars, and the "on average" line covers US stocks only.
 
+Three of the five parse.bot endpoints are used, picked by what each costs:
+
+| Endpoint | Gives | Called |
+| --- | --- | --- |
+| quotes | the whole market in one response | once per trading day |
+| securities | ticker → official company name | once per 30 days |
+| detail | 20 sessions of history, day range, volume for one company | only by `/ai`, once per company per day |
+
+The market-wide trade tape and the listings table add nothing the report needs,
+so they are never called.
+
 Spending stays low by design:
 
-- **One paid request per trading day**, made only by the scheduled report. The
-  whole exchange comes back in that one response and is cached in SQLite.
-- **Everything else is free**: `/now`, `/list`, `/add UZ:…` validation and
-  `/ai UZ:…` all read that cached copy.
-- **History accumulates locally.** The scraper only knows "today", so each
-  snapshot's prices are appended to a local table — that is where day and week
-  changes come from. Early on, a UZSE line shows `— week` until six sessions
-  have been recorded; it fills in on its own.
+- **One paid request per trading day**, made only by the scheduled report, and
+  cached in SQLite. `/now`, `/list` and `/add UZ:…` validation all read that
+  copy for free.
+- **History accumulates locally.** Each snapshot's closing prices are appended
+  to a local table — filed under the day a share actually traded, not today, so
+  a stock that sat still for a week does not get invented price moves. Day and
+  week changes are computed from that table and cost nothing.
+- **`/ai UZ:…` backfills 20 sessions in one request**, so the week figure is
+  real immediately rather than after six days of snapshots.
 - **A hard counter refuses to overspend**, and keeps `PARSEBOT_RESERVE` credits
   back so a burst of `/now` can never starve the daily report. `/status` shows
   what is left.
 
 Around 22 trading days a month means roughly 22 of 200 requests used.
+
+Two things about this exchange the code handles explicitly:
+
+- **Commas are thousands separators.** `16,100` is sixteen thousand one hundred.
+  Reading it as `16.1` would understate the price a thousandfold and corrupt
+  every percentage, so the grouping pattern is matched, not guessed.
+- **Trading is thin.** Many shares go days without a single trade. A quote whose
+  last trade predates the newest session is labelled
+  `⏳ no trades for 5 days — price is from 2026-08-05` rather than being shown
+  as if it were current.
 
 ## Setup
 

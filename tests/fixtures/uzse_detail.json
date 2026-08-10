@@ -1,0 +1,26 @@
+{
+  "status": "success",
+  "data": {
+    "security_code": "UZ7025770007",
+    "ticker": "KVTS",
+    "today_change": {"direction": "up", "value": "101.0"},
+    "today_quantity": "12,500",
+    "today_volume": "UZS29,812,500",
+    "start_price": "2,300",
+    "max_price": "2,400",
+    "min_price": "2,280",
+    "issue_value": "3,148,983,500",
+    "intraday_trades": [],
+    "total_intraday_trades": 0,
+    "historical_data": [
+      {"date": "10.08.2026", "closing_price": "2,385", "change_direction": "up", "change_value": "101.0", "quantity": "12,500", "volume": "29,812,500"},
+      {"date": "07.08.2026", "closing_price": "2,284", "change_direction": "down", "change_value": "16.0", "quantity": "3,000", "volume": "6,852,000"},
+      {"date": "06.08.2026", "closing_price": "2,300", "change_direction": "up", "change_value": "50.0", "quantity": "1,000", "volume": "2,300,000"},
+      {"date": "05.08.2026", "closing_price": "2,250", "change_direction": "", "change_value": "0", "quantity": "0", "volume": "0"},
+      {"date": "04.08.2026", "closing_price": "2,250", "change_direction": "up", "change_value": "25.0", "quantity": "500", "volume": "1,125,000"},
+      {"date": "03.08.2026", "closing_price": "2,225", "change_direction": "down", "change_value": "10.0", "quantity": "800", "volume": "1,780,000"},
+      {"date": "31.07.2026", "closing_price": "2,235", "change_direction": "", "change_value": "0", "quantity": "0", "volume": "0"}
+    ],
+    "total_historical_records": 7
+  }
+}

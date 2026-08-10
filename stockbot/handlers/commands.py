@@ -165,7 +165,7 @@ async def add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await _reply(update, "UZSE data is not configured on the server.")
             return
         # Validated against the cached snapshot, so adding a ticker is free.
-        await uzse.ensure_snapshot(scheduled=False)
+        await uzse.ensure_quotes(scheduled=False)
         quote = uzse.get_quote(ticker)
     else:
         quote = await _prices(context).resolve_ticker(ticker)

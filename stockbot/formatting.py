@@ -7,12 +7,21 @@ kept deliberately short: two lines per company, numbers first.
 from __future__ import annotations
 
 from datetime import date, datetime
-from html import escape
+from html import escape as _escape
 
 from .services.prices import Quote
 
 MAX_NAME_LENGTH = 24
 TELEGRAM_MESSAGE_LIMIT = 4096
+
+
+def escape(text: str) -> str:
+    """Escape for Telegram HTML text nodes.
+
+    Apostrophes are left alone: quote escaping only matters inside attributes,
+    and Uzbek company names are full of them (O'zbektelekom).
+    """
+    return _escape(str(text), quote=False)
 
 
 def money(value: float | None, currency: str = "USD") -> str:
@@ -75,7 +84,10 @@ def quote_lines(quote: Quote) -> str:
         f"{percent(quote.day_change_pct)} day  "
         f"{percent(quote.week_change_pct)} week"
     )
-    return f"{header}\n<code>{numbers}</code>"
+    rendered = f"{header}\n<code>{numbers}</code>"
+    if quote.note:
+        rendered += f"\n   <i>⏳ {escape(quote.note)}</i>"
+    return rendered
 
 
 MARKET_HEADINGS = {
@@ -136,6 +148,7 @@ def render_ticker_report(
     ai_comment: str | None,
     headlines: list[str],
     history_depth: int | None = None,
+    detail: list[tuple[str, str]] | None = None,
 ) -> str:
     if not quote.ok:
         return (
@@ -153,6 +166,10 @@ def render_ticker_report(
             f"\n<i>Only {history_depth} trading day(s) recorded so far, so the "
             f"{missing} change is not available yet. It fills in automatically.</i>"
         )
+
+    if detail:
+        rows = "\n".join(f"{escape(label)}: <b>{escape(value)}</b>" for label, value in detail)
+        parts.append(f"\n📐 <b>Trading detail</b>\n{rows}")
 
     if headlines:
         news = "\n".join(f"• {escape(h)}" for h in headlines[:3])

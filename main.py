@@ -47,7 +47,9 @@ def build_application() -> Application:
     ai = AIClient(config.groq_api_key, config.groq_model)
     uzse = UzseProvider(
         storage,
-        api_url=config.parsebot_api_url,
+        quotes_url=config.parsebot_quotes_url,
+        securities_url=config.parsebot_securities_url,
+        detail_url=config.parsebot_detail_url,
         api_key=config.parsebot_api_key,
         monthly_limit=config.parsebot_monthly_limit,
         reserve=config.parsebot_reserve,

@@ -32,7 +32,9 @@ class Config:
     max_tickers_per_user: int = 25
     log_level: str = "INFO"
     heartbeat_url: str = ""
-    parsebot_api_url: str = ""
+    parsebot_quotes_url: str = ""
+    parsebot_securities_url: str = ""
+    parsebot_detail_url: str = ""
     parsebot_api_key: str = ""
     parsebot_auth_header: str = "Authorization"
     parsebot_auth_scheme: str = "Bearer"
@@ -47,7 +49,7 @@ class Config:
 
     @property
     def uzse_enabled(self) -> bool:
-        return bool(self.parsebot_api_url and self.parsebot_api_key)
+        return bool(self.parsebot_quotes_url and self.parsebot_api_key)
 
 
 def load_config() -> Config:
@@ -79,7 +81,9 @@ def load_config() -> Config:
         max_tickers_per_user=int(os.getenv("MAX_TICKERS_PER_USER", "25")),
         log_level=os.getenv("LOG_LEVEL", "INFO").strip().upper(),
         heartbeat_url=os.getenv("HEARTBEAT_URL", "").strip(),
-        parsebot_api_url=os.getenv("PARSEBOT_API_URL", "").strip(),
+        parsebot_quotes_url=os.getenv("PARSEBOT_QUOTES_URL", "").strip(),
+        parsebot_securities_url=os.getenv("PARSEBOT_SECURITIES_URL", "").strip(),
+        parsebot_detail_url=os.getenv("PARSEBOT_DETAIL_URL", "").strip(),
         parsebot_api_key=os.getenv("PARSEBOT_API_KEY", "").strip(),
         parsebot_auth_header=os.getenv("PARSEBOT_AUTH_HEADER", "Authorization").strip(),
         parsebot_auth_scheme=os.getenv("PARSEBOT_AUTH_SCHEME", "Bearer").strip(),

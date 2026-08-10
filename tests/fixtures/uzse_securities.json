@@ -1,0 +1,13 @@
+{
+  "status": "success",
+  "data": {
+    "market_type": "STK",
+    "total": 4,
+    "securities": [
+      {"security_code": "UZ7012480008", "ticker": "MXUS", "company_name": "<93-MAXSUS TREST> Aksiyadorlik jamiyati"},
+      {"security_code": "UZ7025770007", "ticker": "KVTS", "company_name": "<Kvarts> aksiyadorlik jamiyati"},
+      {"security_code": "UZ7021720006", "ticker": "UZMK", "company_name": "<O'zbekiston metallurgiya kombinati> aksiyadorlik jamiyati"},
+      {"security_code": "UZ7003040001", "ticker": "UZMT", "company_name": "<UzAuto Motors> aksiyadorlik jamiyati"}
+    ]
+  }
+}

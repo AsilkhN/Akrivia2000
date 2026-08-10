@@ -6,11 +6,11 @@ import asyncio
 import logging
 from dataclasses import dataclass
 
-from .formatting import render_report, render_ticker_report
+from .formatting import money, render_report, render_ticker_report
 from .services.ai import AIClient
 from .services.prices import PriceProvider, Quote
 from .services.uzse import MARKET as UZSE_MARKET
-from .services.uzse import BudgetExhausted, UzseProvider
+from .services.uzse import BudgetExhausted, UzseDetail, UzseProvider
 from .storage import Storage
 
 logger = logging.getLogger(__name__)
@@ -100,7 +100,7 @@ class ReportBuilder:
         if not tickers or self._uzse is None or not self._uzse.enabled:
             return []
         try:
-            await self._uzse.ensure_snapshot(scheduled=scheduled)
+            await self._uzse.ensure_quotes(scheduled=scheduled)
         except BudgetExhausted as exc:
             logger.warning("UZSE data skipped: %s", exc)
         return [self._uzse.get_quote(ticker) for ticker in tickers]
@@ -135,22 +135,32 @@ class ReportBuilder:
                 [],
             )
 
-        await self._uzse.ensure_snapshot(scheduled=False)
+        await self._uzse.ensure_quotes(scheduled=False)
+        # The per-company endpoint returns 20 sessions of history in one paid
+        # request, and folds them into local history — so this is the command
+        # that makes the week figure real, rather than waiting six days.
+        detail = await self._uzse.fetch_detail(ticker)
         quote = self._uzse.get_quote(ticker)
         if not quote.ok:
             return render_ticker_report(quote, None, [])
 
         depth = self._uzse.history_depth(quote.ticker)
-        facts = _facts_block([quote], None)
+        facts = _facts_block([quote], None) + _uzse_detail_facts(detail)
         facts += (
-            f"\nExchange: Uzbek Stock Exchange (UZSE), currency UZS."
-            f"\nLocally recorded sessions for this ticker: {depth}."
-            "\nNo news feed is available for this exchange."
+            "\nExchange: Uzbek Stock Exchange (UZSE), currency UZS. This is a "
+            "small, thinly traded market: many shares go days without a single "
+            "trade, so a price can be stale and a percentage move can come from "
+            "one small transaction."
+            f"\nTrading sessions on record for this company: {depth}."
+            "\nNo news feed exists for this exchange, so if the numbers do not "
+            "explain a move, say the reason is not visible in the data."
         )
         comment = await self._ai.ticker_comment(
             ticker=quote.ticker, facts=facts, headlines=""
         )
-        return render_ticker_report(quote, comment, [], history_depth=depth)
+        return render_ticker_report(
+            quote, comment, [], history_depth=depth, detail=_detail_rows(detail)
+        )
 
     async def _headlines_for_movers(self, quotes: list[Quote]) -> dict[str, list[str]]:
         if not self._ai.enabled:
@@ -197,6 +207,50 @@ def _facts_block(quotes: list[Quote], benchmark: Quote | None) -> str:
             f"day {benchmark.day_change_pct:+.2f}%"
         )
     return "\n".join(lines) or "(no price data available)"
+
+
+def _uzse_detail_facts(detail: UzseDetail | None) -> str:
+    """Extra numbers the per-company endpoint gives that the quotes feed does not."""
+    if detail is None:
+        return ""
+    lines = []
+    if detail.min_price and detail.max_price:
+        lines.append(f"Today's range: {detail.min_price:,.2f} to {detail.max_price:,.2f} UZS")
+    if detail.today_quantity is not None:
+        lines.append(f"Shares traded today: {detail.today_quantity:,.0f}")
+    if detail.today_volume is not None:
+        lines.append(f"Money traded today: {detail.today_volume:,.0f} UZS")
+    if len(detail.history) >= 2:
+        closes = [detail.history[d] for d in sorted(detail.history)]
+        lines.append(
+            f"Last {len(closes)} closes, oldest first: "
+            + ", ".join(f"{c:,.2f}" for c in closes)
+        )
+    return ("\n" + "\n".join(lines)) if lines else ""
+
+
+def _detail_rows(detail: UzseDetail | None) -> list[tuple[str, str]]:
+    """Label/value pairs shown above the AI commentary in a UZSE briefing."""
+    if detail is None:
+        return []
+    rows: list[tuple[str, str]] = []
+    if detail.min_price and detail.max_price:
+        rows.append(
+            ("Day range", f"{money(detail.min_price, 'UZS')} – {money(detail.max_price, 'UZS')}")
+        )
+    if detail.today_quantity:
+        rows.append(("Shares traded", f"{detail.today_quantity:,.0f}".replace(",", " ")))
+    if detail.today_volume:
+        rows.append(("Money traded", money(detail.today_volume, "UZS")))
+    if detail.history:
+        closes = [detail.history[d] for d in sorted(detail.history)]
+        rows.append(
+            (
+                f"{len(closes)}-session range",
+                f"{money(min(closes), 'UZS')} – {money(max(closes), 'UZS')}",
+            )
+        )
+    return rows
 
 
 def _headlines_block(headlines: dict[str, list[str]]) -> str:
