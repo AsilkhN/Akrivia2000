@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from .formatting import render_report, render_ticker_report
 from .services.ai import AIClient
 from .services.prices import PriceProvider, Quote
+from .services.uzse import MARKET as UZSE_MARKET
+from .services.uzse import BudgetExhausted, UzseProvider
 from .storage import Storage
 
 logger = logging.getLogger(__name__)
@@ -32,50 +34,82 @@ class ReportBuilder:
         prices: PriceProvider,
         ai: AIClient,
         benchmark_ticker: str,
+        uzse: UzseProvider | None = None,
     ) -> None:
         self._storage = storage
         self._prices = prices
         self._ai = ai
         self._benchmark_ticker = benchmark_ticker
+        self._uzse = uzse
 
-    async def build_portfolio_report(self, chat_id: int) -> BuiltReport | None:
-        """Return the daily report, or None when the watchlist is empty."""
+    async def build_portfolio_report(
+        self, chat_id: int, *, scheduled: bool = False
+    ) -> BuiltReport | None:
+        """Return the daily report, or None when the watchlist is empty.
+
+        `scheduled` is passed through to the metered UZSE provider: only the
+        daily job is allowed to spend a parse.bot credit, and only once a day.
+        """
         entries = self._storage.get_watchlist(chat_id)
         if not entries:
             return None
 
-        tickers = [ticker for ticker, _ in entries]
-        names = dict(entries)
+        us_tickers = [e.ticker for e in entries if e.market != UZSE_MARKET]
+        uz_tickers = [e.ticker for e in entries if e.market == UZSE_MARKET]
+        names = {e.ticker: e.name for e in entries}
 
         quotes_map, benchmark = await asyncio.gather(
-            self._prices.get_quotes(tickers),
+            self._prices.get_quotes(us_tickers),
             self._prices.get_quote(self._benchmark_ticker),
         )
-
-        quotes = []
-        for ticker in tickers:
-            quote = quotes_map[ticker]
-            # Prefer the name captured at /add time; `.info` is slow and flaky.
-            if names.get(ticker):
-                quote.name = names[ticker]
-            quotes.append(quote)
-
+        quotes = [quotes_map[t] for t in us_tickers]
         quotes.sort(key=_sort_key)
 
-        session_date, is_live = _session_state(quotes)
+        uz_quotes = await self._uzse_quotes(uz_tickers, scheduled=scheduled)
+        uz_quotes.sort(key=_sort_key)
+
+        for quote in quotes + uz_quotes:
+            # Prefer the name captured at /add time; `.info` is slow and flaky.
+            if names.get(quote.ticker):
+                quote.name = names[quote.ticker]
+
+        session_date, is_live = _session_state(quotes or uz_quotes)
+        uzse_session_date, _ = _session_state(uz_quotes)
+
         headlines = await self._headlines_for_movers(quotes)
         comment = await self._ai.portfolio_comment(
-            facts=_facts_block(quotes, benchmark),
+            facts=_facts_block(quotes + uz_quotes, benchmark),
             headlines=_headlines_block(headlines),
         )
 
         return BuiltReport(
-            text=render_report(quotes, benchmark, comment, session_date, is_live),
+            text=render_report(
+                quotes + uz_quotes,
+                benchmark,
+                comment,
+                session_date,
+                is_live,
+                uzse_session_date=uzse_session_date,
+            ),
             session_date=session_date,
             is_live=is_live,
         )
 
-    async def build_ticker_report(self, ticker: str) -> str:
+    async def _uzse_quotes(self, tickers: list[str], *, scheduled: bool) -> list[Quote]:
+        """UZSE quotes come from the cached snapshot; only `scheduled` may pay."""
+        if not tickers or self._uzse is None or not self._uzse.enabled:
+            return []
+        try:
+            await self._uzse.ensure_snapshot(scheduled=scheduled)
+        except BudgetExhausted as exc:
+            logger.warning("UZSE data skipped: %s", exc)
+        return [self._uzse.get_quote(ticker) for ticker in tickers]
+
+    async def build_ticker_report(self, ticker: str, market: str | None = None) -> str:
+        """Deep briefing on one company, routed to the right exchange."""
+        if market == UZSE_MARKET:
+            return await self._build_uzse_ticker_report(ticker)
+
         quote = await self._prices.get_quote(ticker)
         if not quote.ok:
             return render_ticker_report(quote, None, [])
@@ -87,6 +121,36 @@ class ReportBuilder:
             headlines=_headlines_block({quote.ticker: headlines}),
         )
         return render_ticker_report(quote, comment, headlines)
+
+    async def _build_uzse_ticker_report(self, ticker: str) -> str:
+        """UZSE briefing. Reads the cached snapshot only — never spends a credit.
+
+        There is no news feed for UZSE, so the AI works from the exchange data
+        alone and is told to say so rather than speculate about causes.
+        """
+        if self._uzse is None or not self._uzse.enabled:
+            return render_ticker_report(
+                Quote(ticker=ticker, market=UZSE_MARKET, error="UZSE data is not configured"),
+                None,
+                [],
+            )
+
+        await self._uzse.ensure_snapshot(scheduled=False)
+        quote = self._uzse.get_quote(ticker)
+        if not quote.ok:
+            return render_ticker_report(quote, None, [])
+
+        depth = self._uzse.history_depth(quote.ticker)
+        facts = _facts_block([quote], None)
+        facts += (
+            f"\nExchange: Uzbek Stock Exchange (UZSE), currency UZS."
+            f"\nLocally recorded sessions for this ticker: {depth}."
+            "\nNo news feed is available for this exchange."
+        )
+        comment = await self._ai.ticker_comment(
+            ticker=quote.ticker, facts=facts, headlines=""
+        )
+        return render_ticker_report(quote, comment, [], history_depth=depth)
 
     async def _headlines_for_movers(self, quotes: list[Quote]) -> dict[str, list[str]]:
         if not self._ai.enabled:
@@ -120,7 +184,8 @@ def _facts_block(quotes: list[Quote], benchmark: Quote | None) -> str:
         if not quote.ok:
             continue
         name = quote.name or quote.ticker
-        line = f"{quote.ticker} ({name}): price {quote.price:.2f} {quote.currency}"
+        where = "UZSE, Uzbekistan" if quote.market == UZSE_MARKET else "US market"
+        line = f"{quote.ticker} ({name}, {where}): price {quote.price:.2f} {quote.currency}"
         if quote.day_change_pct is not None:
             line += f", day {quote.day_change_pct:+.2f}%"
         if quote.week_change_pct is not None:

@@ -12,6 +12,7 @@ from stockbot.handlers import commands, scheduler
 from stockbot.report import ReportBuilder
 from stockbot.services.ai import AIClient
 from stockbot.services.prices import PriceProvider
+from stockbot.services.uzse import UzseProvider
 from stockbot.storage import Storage
 
 logger = logging.getLogger(__name__)
@@ -44,14 +45,38 @@ def build_application() -> Application:
     storage = Storage(config.database_path)
     prices = PriceProvider()
     ai = AIClient(config.groq_api_key, config.groq_model)
-    reports = ReportBuilder(storage, prices, ai, config.benchmark_ticker)
+    uzse = UzseProvider(
+        storage,
+        api_url=config.parsebot_api_url,
+        api_key=config.parsebot_api_key,
+        monthly_limit=config.parsebot_monthly_limit,
+        reserve=config.parsebot_reserve,
+        auth_header=config.parsebot_auth_header,
+        auth_scheme=config.parsebot_auth_scheme,
+        method=config.parsebot_method,
+    )
+    reports = ReportBuilder(storage, prices, ai, config.benchmark_ticker, uzse)
 
     if not config.ai_enabled:
         logger.warning("GROQ_API_KEY is not set — reports will have no AI commentary.")
+    if config.uzse_enabled:
+        if config.parsebot_used_this_month:
+            uzse.seed_credits_used(config.parsebot_used_this_month)
+        logger.info(
+            "parse.bot enabled: %s of %s credits left this month",
+            uzse.credits_remaining(),
+            config.parsebot_monthly_limit,
+        )
 
     application = ApplicationBuilder().token(config.telegram_token).post_init(_post_init).build()
     application.bot_data.update(
-        {"config": config, "storage": storage, "prices": prices, "reports": reports}
+        {
+            "config": config,
+            "storage": storage,
+            "prices": prices,
+            "reports": reports,
+            "uzse": uzse,
+        }
     )
 
     handlers = {

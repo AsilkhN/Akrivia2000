@@ -15,6 +15,8 @@ from ..config import Config, is_valid_hhmm
 from ..formatting import render_watchlist, split_message
 from ..report import ReportBuilder
 from ..services.prices import PriceProvider
+from ..services.uzse import MARKET as UZSE_MARKET
+from ..services.uzse import UzseProvider
 from ..storage import Storage
 
 logger = logging.getLogger(__name__)
@@ -25,7 +27,8 @@ much it moved that day and over the week, and a plain-English note explaining
 what happened.
 
 <b>Commands</b>
-/add <code>TICKER</code> — follow a company (e.g. <code>/add NVDA</code>)
+/add <code>TICKER</code> — follow a US company (e.g. <code>/add NVDA</code>)
+/add <code>UZ:TICKER</code> — follow an Uzbek one (e.g. <code>/add UZ:KVTS</code>)
 /remove <code>TICKER</code> — stop following it
 /list — everything you follow right now
 /now — send the report immediately
@@ -42,7 +45,14 @@ is Nvidia. <b>day</b> is the change since the previous trading day's close;
 <b>week</b> is the change over the last five trading days. Percentages matter more
 than dollars: +2% means the same thing on a $10 stock and a $500 one.
 The report also shows the whole US market, so you can tell a company-specific
-move apart from a day when everything went up or down together."""
+move apart from a day when everything went up or down together.
+
+<b>Two exchanges</b>
+US companies are listed under 🇺🇸 and priced in dollars; Uzbek ones under 🇺🇿
+and priced in sums. They trade on different calendars and hours, so they are
+never averaged together. UZSE data comes from a metered scraper — the bot
+fetches the whole exchange once a day and answers everything else from that
+copy. /status shows how many fetches are left this month."""
 
 
 def _config(context: ContextTypes.DEFAULT_TYPE) -> Config:
@@ -59,6 +69,10 @@ def _prices(context: ContextTypes.DEFAULT_TYPE) -> PriceProvider:
 
 def _reports(context: ContextTypes.DEFAULT_TYPE) -> ReportBuilder:
     return context.bot_data["reports"]
+
+
+def _uzse(context: ContextTypes.DEFAULT_TYPE) -> UzseProvider | None:
+    return context.bot_data.get("uzse")
 
 
 async def _reply(update: Update, text: str) -> None:
@@ -142,22 +156,58 @@ async def add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
-    ticker = context.args[0].strip().upper()
+    ticker, market = _parse_ticker_argument(context, context.args[0])
     await update.effective_chat.send_action(ChatAction.TYPING)
-    quote = await _prices(context).resolve_ticker(ticker)
+
+    if market == UZSE_MARKET:
+        uzse = _uzse(context)
+        if uzse is None or not uzse.enabled:
+            await _reply(update, "UZSE data is not configured on the server.")
+            return
+        # Validated against the cached snapshot, so adding a ticker is free.
+        await uzse.ensure_snapshot(scheduled=False)
+        quote = uzse.get_quote(ticker)
+    else:
+        quote = await _prices(context).resolve_ticker(ticker)
 
     if not quote.ok:
-        await _reply(
-            update,
-            f"❌ <b>{ticker}</b> — {quote.error}.\n"
-            "Check the ticker on finance.yahoo.com and try again.",
+        hint = (
+            "Check the symbol against the UZSE listing and try again."
+            if market == UZSE_MARKET
+            else "Check the ticker on finance.yahoo.com and try again."
         )
+        await _reply(update, f"❌ <b>{ticker}</b> — {quote.error}.\n{hint}")
         return
 
-    if storage.add_ticker(chat_id, quote.ticker, quote.name):
-        await _reply(update, f"✅ Now following <b>{quote.ticker}</b> — {quote.name}.")
+    label = "🇺🇿 UZSE" if quote.market == UZSE_MARKET else "🇺🇸 US"
+    if storage.add_ticker(chat_id, quote.ticker, quote.name, quote.market):
+        await _reply(
+            update, f"✅ Now following <b>{quote.ticker}</b> — {quote.name} ({label})."
+        )
     else:
         await _reply(update, f"<b>{quote.ticker}</b> is already on your list.")
+
+
+def _parse_ticker_argument(
+    context: ContextTypes.DEFAULT_TYPE, raw: str
+) -> tuple[str, str]:
+    """Split `UZ:KVTS` into ticker and market.
+
+    An explicit prefix always wins. Without one, a symbol already present in the
+    cached UZSE snapshot is treated as Uzbek — that check reads the cache and
+    costs no parse.bot credits — and everything else goes to Yahoo.
+    """
+    text = raw.strip().upper()
+    for prefix in ("UZ:", "UZSE:"):
+        if text.startswith(prefix):
+            return text[len(prefix) :], UZSE_MARKET
+    if text.startswith(("US:", "YF:")):
+        return text.split(":", 1)[1], "US"
+
+    uzse = _uzse(context)
+    if uzse is not None and uzse.enabled and text in uzse.known_tickers():
+        return text, UZSE_MARKET
+    return text, "US"
 
 
 async def remove(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -213,7 +263,8 @@ async def ai_briefing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     await update.effective_chat.send_action(ChatAction.TYPING)
-    text = await _reports(context).build_ticker_report(context.args[0].strip().upper())
+    ticker, market = _parse_ticker_argument(context, context.args[0])
+    text = await _reports(context).build_ticker_report(ticker, market)
     await _reply(update, text)
 
 
@@ -285,6 +336,16 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"AI commentary: <b>{'on' if config.ai_enabled else 'off'}</b>",
         f"Last report sent for session: <b>{user.last_session_sent or 'none yet'}</b>",
     ]
+
+    uzse = _uzse(context)
+    if uzse is not None and uzse.enabled:
+        cached = "yes" if uzse.snapshot_is_fresh() else "not yet today"
+        lines.append(
+            f"\n🇺🇿 <b>UZSE data (parse.bot)</b>\n"
+            f"Credits left this month: <b>{uzse.credits_remaining()}</b> "
+            f"of {config.parsebot_monthly_limit}\n"
+            f"Today's snapshot cached: <b>{cached}</b>"
+        )
     await _reply(update, "\n".join(lines))
 
 

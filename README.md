@@ -6,12 +6,17 @@ price, daily and weekly change, and a plain-English explanation written by an AI
 ```
 📊 Daily report · Fri, 07 Aug · market close
 
+🇺🇸 US market
 📉 IONQ — IonQ
 $41.20  -6.2% day  -9.1% week
 📈 ONTO — Onto Innovation
 $123.46  +1.7% day  +3.4% week
 
-Your list on average: -1.1% today
+🇺🇿 Uzbek exchange (UZSE)
+📈 KVTS — Kvarts
+12 500 UZS  +2.0% day  +4.1% week
+
+Your US stocks on average: -2.2% today
 Whole US market (SPY): +0.4%
 
 🤖 What this means
@@ -24,7 +29,8 @@ The list is concentrated in semiconductors, so these names tend to move together
 
 | Command | What it does |
 | --- | --- |
-| `/add NVDA` | Follow a company |
+| `/add NVDA` | Follow a US company |
+| `/add UZ:KVTS` | Follow an Uzbek (UZSE) company |
 | `/remove NVDA` | Stop following it |
 | `/list` | Everything you follow |
 | `/now` | Send the report immediately |
@@ -35,6 +41,29 @@ The list is concentrated in semiconductors, so these names tend to move together
 | `/status` | Your current settings |
 | `/help` | How it all works |
 
+## Two exchanges, two data sources
+
+US stocks come from Yahoo Finance (no key, no quota). Uzbek stocks come from a
+**parse.bot** scraper, which is metered — a fixed number of requests per month.
+The bot never mixes them: separate sections, separate currencies, separate
+trading calendars, and the "on average" line covers US stocks only.
+
+Spending stays low by design:
+
+- **One paid request per trading day**, made only by the scheduled report. The
+  whole exchange comes back in that one response and is cached in SQLite.
+- **Everything else is free**: `/now`, `/list`, `/add UZ:…` validation and
+  `/ai UZ:…` all read that cached copy.
+- **History accumulates locally.** The scraper only knows "today", so each
+  snapshot's prices are appended to a local table — that is where day and week
+  changes come from. Early on, a UZSE line shows `— week` until six sessions
+  have been recorded; it fills in on its own.
+- **A hard counter refuses to overspend**, and keeps `PARSEBOT_RESERVE` credits
+  back so a burst of `/now` can never starve the daily report. `/status` shows
+  what is left.
+
+Around 22 trading days a month means roughly 22 of 200 requests used.
+
 ## Setup
 
 **1. Get a Telegram bot token.** Message [@BotFather](https://t.me/BotFather),
@@ -44,7 +73,9 @@ send `/newbot`, follow the prompts, copy the token.
 [console.groq.com/keys](https://console.groq.com/keys). This powers the AI
 commentary. Without it everything else still works.
 
-Price data needs no key — it comes from Yahoo Finance via `yfinance`.
+Price data for US stocks needs no key — it comes from Yahoo Finance via
+`yfinance`. For Uzbek stocks, add your **parse.bot** endpoint and key
+(`PARSEBOT_API_URL`, `PARSEBOT_API_KEY`); leave them empty to run US-only.
 
 **3. Configure and run.**
 
@@ -89,6 +120,7 @@ stockbot/
 ├── report.py                combines prices + news + AI into one report
 ├── services/
 │   ├── prices.py            Yahoo Finance, cached, one failing ticker is isolated
+│   ├── uzse.py              parse.bot scraper: budget guard, day cache, parser
 │   └── ai.py                Groq commentary (optional, never fatal)
 └── handlers/
     ├── commands.py          /add, /remove, /now, /ai, …
@@ -114,9 +146,9 @@ Design decisions worth knowing:
 ## Tests
 
 ```bash
-pip install pytest
+pip install pytest pytest-asyncio
 python -m pytest tests -q
 ```
 
-Formatting, storage and the scheduling logic are covered and run offline — no
-network, no API keys needed.
+Formatting, storage, scheduling and the parse.bot budget rules are covered and
+run offline — no network, no API keys needed.

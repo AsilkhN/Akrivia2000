@@ -24,8 +24,10 @@ def test_watchlist_is_per_user(storage):
     storage.add_ticker(1, "onto", "Onto Innovation")
     storage.add_ticker(2, "NOW", "ServiceNow")
 
-    assert storage.get_watchlist(1) == [("ONTO", "Onto Innovation")]
-    assert storage.get_watchlist(2) == [("NOW", "ServiceNow")]
+    assert [(e.ticker, e.name) for e in storage.get_watchlist(1)] == [
+        ("ONTO", "Onto Innovation")
+    ]
+    assert [(e.ticker, e.name) for e in storage.get_watchlist(2)] == [("NOW", "ServiceNow")]
 
 
 def test_duplicate_ticker_is_rejected(storage):
@@ -56,7 +58,9 @@ def test_settings_survive_reopening_the_database(tmp_path):
     assert user is not None
     assert user.digest_time == "18:30"
     assert user.timezone == "Asia/Tashkent"
-    assert reopened.get_watchlist(7) == [("CRDO", "Credo Technology")]
+    assert [(e.ticker, e.name) for e in reopened.get_watchlist(7)] == [
+        ("CRDO", "Credo Technology")
+    ]
     reopened.close()
 
 

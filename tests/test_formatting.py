@@ -8,6 +8,7 @@ from stockbot.formatting import (
     trend_emoji,
 )
 from stockbot.services.prices import Quote
+from stockbot.storage import WatchlistEntry
 
 
 def make_quote(**overrides) -> Quote:
@@ -84,8 +85,47 @@ def test_empty_watchlist_message_explains_next_step():
 
 
 def test_watchlist_lists_every_entry():
-    text = render_watchlist([("ONTO", "Onto Innovation"), ("NOW", None)], "09:00 UTC")
+    entries = [
+        WatchlistEntry("ONTO", "Onto Innovation", "US"),
+        WatchlistEntry("NOW", None, "US"),
+    ]
+    text = render_watchlist(entries, "09:00 UTC")
     assert "ONTO" in text and "NOW" in text and "09:00 UTC" in text
+
+
+def test_watchlist_separates_the_two_exchanges():
+    entries = [
+        WatchlistEntry("ONTO", "Onto Innovation", "US"),
+        WatchlistEntry("KVTS", "Kvarts", "UZSE"),
+    ]
+    text = render_watchlist(entries, "09:00 UTC")
+    assert "US market" in text and "UZSE" in text
+    assert text.index("ONTO") < text.index("KVTS")
+
+
+def test_uzs_prices_have_no_decimals():
+    assert money(12500.0, "UZS") == "12 500 UZS"
+
+
+def test_report_keeps_the_two_markets_in_separate_sections():
+    quotes = [
+        make_quote(ticker="ONTO", day_change_pct=1.5),
+        make_quote(
+            ticker="KVTS", name="Kvarts", price=12500.0, currency="UZS",
+            day_change_pct=-2.0, market="UZSE",
+        ),
+    ]
+    text = render_report(quotes, None, None, "2026-08-07", is_live=False)
+    assert "US market" in text and "UZSE" in text
+    assert "12 500 UZS" in text
+    # The averages line must cover US stocks only — different currency, calendar.
+    assert "Your US stocks on average: <b>+1.5%</b>" in text
+    assert "parse.bot" in text
+
+
+def test_report_without_uzse_does_not_mention_parsebot():
+    text = render_report([make_quote()], None, None, "2026-08-07", is_live=False)
+    assert "parse.bot" not in text
 
 
 def test_split_message_respects_limit_and_keeps_content():

@@ -39,6 +39,7 @@ class Quote:
     currency: str = "USD"
     session_date: str | None = None  # YYYY-MM-DD of the bar being reported
     is_live: bool = False  # True when that bar is today and still moving
+    market: str = "US"  # 'US' (Yahoo) or 'UZSE' (parse.bot)
     error: str | None = None
 
     @property

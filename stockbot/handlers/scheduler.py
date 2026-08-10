@@ -64,7 +64,8 @@ async def _send_daily_report(context: ContextTypes.DEFAULT_TYPE, user: User) -> 
     reports: ReportBuilder = context.bot_data["reports"]
 
     local_date = datetime.now(ZoneInfo(user.timezone)).date().isoformat()
-    report = await reports.build_portfolio_report(user.chat_id)
+    # Only the scheduled run may spend a parse.bot credit, at most once a day.
+    report = await reports.build_portfolio_report(user.chat_id, scheduled=True)
 
     if report is None:
         logger.info("chat %s has an empty watchlist, nothing to send", user.chat_id)

@@ -32,10 +32,22 @@ class Config:
     max_tickers_per_user: int = 25
     log_level: str = "INFO"
     heartbeat_url: str = ""
+    parsebot_api_url: str = ""
+    parsebot_api_key: str = ""
+    parsebot_auth_header: str = "Authorization"
+    parsebot_auth_scheme: str = "Bearer"
+    parsebot_method: str = "GET"
+    parsebot_monthly_limit: int = 200
+    parsebot_reserve: int = 40
+    parsebot_used_this_month: int = 0
 
     @property
     def ai_enabled(self) -> bool:
         return bool(self.groq_api_key)
+
+    @property
+    def uzse_enabled(self) -> bool:
+        return bool(self.parsebot_api_url and self.parsebot_api_key)
 
 
 def load_config() -> Config:
@@ -67,6 +79,14 @@ def load_config() -> Config:
         max_tickers_per_user=int(os.getenv("MAX_TICKERS_PER_USER", "25")),
         log_level=os.getenv("LOG_LEVEL", "INFO").strip().upper(),
         heartbeat_url=os.getenv("HEARTBEAT_URL", "").strip(),
+        parsebot_api_url=os.getenv("PARSEBOT_API_URL", "").strip(),
+        parsebot_api_key=os.getenv("PARSEBOT_API_KEY", "").strip(),
+        parsebot_auth_header=os.getenv("PARSEBOT_AUTH_HEADER", "Authorization").strip(),
+        parsebot_auth_scheme=os.getenv("PARSEBOT_AUTH_SCHEME", "Bearer").strip(),
+        parsebot_method=os.getenv("PARSEBOT_METHOD", "GET").strip(),
+        parsebot_monthly_limit=int(os.getenv("PARSEBOT_MONTHLY_LIMIT", "200")),
+        parsebot_reserve=int(os.getenv("PARSEBOT_RESERVE", "40")),
+        parsebot_used_this_month=int(os.getenv("PARSEBOT_USED_THIS_MONTH", "0")),
     )
 
 
