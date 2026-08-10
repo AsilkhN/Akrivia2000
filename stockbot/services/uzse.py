@@ -381,11 +381,22 @@ class UzseProvider:
     def get_quote(self, ticker: str) -> Quote:
         """Build a Quote from the cached snapshot and local history. Free."""
         ticker = ticker.upper()
-        row = self._quotes().get(ticker)
+        quotes = self._quotes()
+        if not quotes:
+            # No snapshot at all is a configuration or connectivity problem, not
+            # an unknown ticker — saying "not listed" would send the reader off
+            # to check a symbol that was never the issue.
+            return Quote(
+                ticker=ticker,
+                error="no UZSE data yet — check PARSEBOT_QUOTES_URL and the server logs",
+                currency=CURRENCY,
+                market=MARKET,
+            )
+        row = quotes.get(ticker)
         if row is None:
             return Quote(
                 ticker=ticker,
-                error="not listed on UZSE, or no snapshot yet",
+                error="not listed on UZSE",
                 currency=CURRENCY,
                 market=MARKET,
             )

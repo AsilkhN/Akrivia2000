@@ -220,7 +220,15 @@ paused you after Telegram reported you had blocked it; `/resume` fixes it. If
 the time is wrong, check `/settz`.
 
 **UZSE data missing** — `/status` shows credits and whether today's snapshot is
-cached. Zero credits means the monthly limit is spent; it resets next month.
+cached. Zero credits means the monthly limit is spent; it resets next month. A
+`404 Not Found` in the logs means `PARSEBOT_QUOTES_URL` is wrong: copy the exact
+URL from the scraper page rather than guessing the path.
+
+**US prices all fail at once, `429 Edge: Too Many Requests`** — Yahoo
+rate-limits datacenter IP ranges, and most VPS hosts sit in one. Seven tickers
+failing together is this, not seven bad symbols. Get a free key at
+[twelvedata.com](https://twelvedata.com/pricing), put it in `.env` as
+`TWELVEDATA_API_KEY`, and restart; the bot switches provider automatically.
 
 **Container restarts in a loop** — `docker compose logs --tail=100`. Almost
 always a bad value in `.env`; the bot validates config at startup and says which

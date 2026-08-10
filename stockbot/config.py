@@ -58,6 +58,8 @@ class Config:
     parsebot_monthly_limit: int = 200
     parsebot_reserve: int = 40
     parsebot_used_this_month: int = 0
+    twelvedata_api_key: str = ""
+    price_provider: str = "auto"
     scout_enabled: bool = True
     scout_time: str = "18:30"
     news_feeds: list[str] = field(default_factory=list)
@@ -65,6 +67,15 @@ class Config:
     @property
     def ai_enabled(self) -> bool:
         return bool(self.groq_api_key)
+
+    @property
+    def use_twelvedata(self) -> bool:
+        """Yahoo blocks datacenter IPs, so a keyed provider wins when available."""
+        if self.price_provider == "yahoo":
+            return False
+        if self.price_provider == "twelvedata":
+            return True
+        return bool(self.twelvedata_api_key)  # 'auto'
 
     @property
     def uzse_enabled(self) -> bool:
@@ -116,6 +127,8 @@ def load_config() -> Config:
         parsebot_monthly_limit=int(os.getenv("PARSEBOT_MONTHLY_LIMIT", "200")),
         parsebot_reserve=int(os.getenv("PARSEBOT_RESERVE", "40")),
         parsebot_used_this_month=int(os.getenv("PARSEBOT_USED_THIS_MONTH", "0")),
+        twelvedata_api_key=os.getenv("TWELVEDATA_API_KEY", "").strip(),
+        price_provider=os.getenv("PRICE_PROVIDER", "auto").strip().lower(),
         scout_enabled=os.getenv("SCOUT_ENABLED", "true").strip().lower() != "false",
         scout_time=scout_time,
         news_feeds=[f.strip() for f in os.getenv("NEWS_FEEDS", DEFAULT_NEWS_FEEDS).split(",") if f.strip()],

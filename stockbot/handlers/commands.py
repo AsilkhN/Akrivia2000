@@ -109,10 +109,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
     added, failed = await _seed_default_tickers(context, chat_id)
-    summary = [f"✅ Following <b>{len(added)}</b> companies: {', '.join(added)}."]
-    if failed:
+    summary = []
+    if added:
         summary.append(
-            f"⚠️ Could not find data for: {', '.join(failed)} — remove or replace them."
+            f"✅ Following <b>{len(added)}</b> companies: {', '.join(added)}."
+        )
+    if failed and added:
+        summary.append(
+            f"⚠️ No data for: {', '.join(failed)} — remove or replace them."
+        )
+    elif failed:
+        # Every single one failing is a provider problem, not seven bad symbols.
+        summary.append(
+            "⚠️ <b>No price data for any company.</b> That usually means the "
+            "price provider is unreachable from this server rather than that the "
+            "tickers are wrong — the server logs will say why.\n"
+            "Uzbek tickers are unaffected: try <code>/add UZ:KVTS</code>."
         )
     summary.append(
         f"\nDaily report at <b>{config.default_digest_time}</b> "

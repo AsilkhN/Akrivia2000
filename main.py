@@ -12,6 +12,7 @@ from stockbot.handlers import commands, scheduler
 from stockbot.report import ReportBuilder
 from stockbot.services.ai import AIClient
 from stockbot.services.prices import PriceProvider
+from stockbot.services.twelvedata import TwelveDataProvider
 from stockbot.services.news import NewsProvider
 from stockbot.services.uzse import UzseProvider
 from stockbot.scout import Scout
@@ -46,7 +47,19 @@ def build_application() -> Application:
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
     storage = Storage(config.database_path)
-    prices = PriceProvider()
+    if config.use_twelvedata:
+        if not config.twelvedata_api_key:
+            raise ConfigError(
+                "PRICE_PROVIDER=twelvedata but TWELVEDATA_API_KEY is not set."
+            )
+        prices = TwelveDataProvider(config.twelvedata_api_key)
+        logger.info("prices: Twelve Data")
+    else:
+        prices = PriceProvider()
+        logger.info(
+            "prices: Yahoo Finance. If quotes fail with HTTP 429, this host's IP "
+            "is rate-limited — set TWELVEDATA_API_KEY to switch providers."
+        )
     ai = AIClient(config.groq_api_key, config.groq_model)
     uzse = UzseProvider(
         storage,
