@@ -119,9 +119,42 @@ def test_report_keeps_the_two_markets_in_separate_sections():
     text = render_report(quotes, None, None, "2026-08-07", is_live=False)
     assert "US market" in text and "UZSE" in text
     assert "12 500 UZS" in text
-    # The averages line must cover US stocks only — different currency, calendar.
-    assert "Your US stocks on average: <b>+1.5%</b>" in text
+    # Each market averages only its own holdings — different currency, calendar.
+    assert "Your 1 on average: +1.5%" in text
+    assert "Your 1 on average: -2.0%" in text
     assert "parse.bot" in text
+
+
+def test_every_yahoo_market_gets_its_own_section():
+    quotes = [
+        make_quote(ticker="NVDA", day_change_pct=2.0, market="US"),
+        make_quote(ticker="BP.L", name="BP", currency="GBP", day_change_pct=1.0, market="UK"),
+        make_quote(ticker="7203.T", name="Toyota", currency="JPY", day_change_pct=-1.0,
+                   market="JP"),
+    ]
+    text = render_report(quotes, None, None, "2026-08-07", is_live=False)
+    assert "US market" in text and "London" in text and "Tokyo" in text
+    # A dollar stock and a yen stock are never averaged together.
+    assert text.count("on average") == 3
+
+
+def test_benchmark_shown_is_the_local_index_for_each_market():
+    quotes = [
+        make_quote(ticker="NVDA", day_change_pct=2.0, market="US"),
+        make_quote(ticker="BP.L", currency="GBP", day_change_pct=1.0, market="UK"),
+    ]
+    benchmarks = {
+        "US": make_quote(ticker="SPY", day_change_pct=0.4, market="US"),
+        "UK": make_quote(ticker="^FTSE", day_change_pct=-0.2, market="UK"),
+    }
+    text = render_report(quotes, benchmarks, None, "2026-08-07", is_live=False)
+    assert "whole market +0.4%" in text
+    assert "whole market -0.2%" in text
+
+
+def test_single_market_report_needs_no_headings():
+    text = render_report([make_quote()], None, None, "2026-08-07", is_live=False)
+    assert "US market" not in text
 
 
 def test_report_without_uzse_does_not_mention_parsebot():

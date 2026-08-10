@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from html import escape as _escape
 
+from .markets import UZSE, market_by_code
 from .services.prices import Quote
 
 MAX_NAME_LENGTH = 24
@@ -90,57 +91,89 @@ def quote_lines(quote: Quote) -> str:
     return rendered
 
 
-MARKET_HEADINGS = {
-    "US": "🇺🇸 <b>US market</b>",
-    "UZSE": "🇺🇿 <b>Uzbek exchange (UZSE)</b>",
-}
+def market_heading(code: str) -> str:
+    return f"<b>{escape(market_by_code(code).heading)}</b>"
+
+
+def _market_section(
+    code: str,
+    group: list[Quote],
+    benchmarks: dict[str, Quote],
+    show_heading: bool,
+) -> list[str]:
+    """One exchange: its own heading, its own session date, its own average."""
+    lines: list[str] = []
+    if show_heading:
+        heading = market_heading(code)
+        session = _group_session(group)
+        if session:
+            heading += f" · {_pretty_date(session)}"
+        lines.append(f"\n{heading}")
+
+    lines.extend(quote_lines(q) for q in group)
+
+    changes = [q.day_change_pct for q in group if q.ok and q.day_change_pct is not None]
+    if changes:
+        average = percent(sum(changes) / len(changes))
+        summary = f"<i>Your {len(changes)} on average: {average}</i>"
+        index = benchmarks.get(code)
+        if index and index.ok and index.day_change_pct is not None:
+            summary = summary[:-4] + (
+                f" · whole market {percent(index.day_change_pct)}</i>"
+            )
+        lines.append(summary)
+    return lines
 
 
 def render_report(
     quotes: list[Quote],
-    benchmark: Quote | None,
+    benchmarks: dict[str, Quote] | None,
     ai_comment: str | None,
     session_date: str | None,
     is_live: bool,
-    uzse_session_date: str | None = None,
 ) -> str:
+    """The daily report, grouped by exchange.
+
+    Markets are never blended: different currencies, calendars and trading
+    hours mean one average across them would describe nothing real.
+    """
     state = "live prices" if is_live else "market close"
     lines = [f"📊 <b>Daily report</b> · {_pretty_date(session_date)} · {state}"]
 
-    # The two exchanges trade in different currencies, on different calendars,
-    # at different hours — mixing them into one list would be misleading.
-    us = [q for q in quotes if q.market != "UZSE"]
-    uz = [q for q in quotes if q.market == "UZSE"]
+    groups = _group_by_market(quotes)
+    benchmarks = benchmarks or {}
+    show_headings = len(groups) > 1
+    if not show_headings:
+        lines.append("")
 
-    for market, group in (("US", us), ("UZSE", uz)):
-        if not group:
-            continue
-        heading = MARKET_HEADINGS[market]
-        if market == "UZSE" and uzse_session_date and uzse_session_date != session_date:
-            heading += f" · {_pretty_date(uzse_session_date)}"
-        lines.append(f"\n{heading}" if len(us) and len(uz) else "")
-        lines.extend(quote_lines(q) for q in group)
-
-    usable = [q.day_change_pct for q in us if q.ok and q.day_change_pct is not None]
-    if usable:
-        average = sum(usable) / len(usable)
-        summary = f"\nYour US stocks on average: <b>{percent(average)}</b> today"
-        if benchmark and benchmark.ok:
-            summary += (
-                f"\nWhole US market ({escape(benchmark.ticker)}): "
-                f"{percent(benchmark.day_change_pct)}"
-            )
-        lines.append(summary)
+    for code, group in groups:
+        lines.extend(_market_section(code, group, benchmarks, show_headings))
 
     if ai_comment:
         lines.append(f"\n🤖 <b>What this means</b>\n{escape(ai_comment)}")
 
-    sources = "Yahoo Finance" + (" and parse.bot (UZSE)" if uz else "")
+    has_uzse = any(code == "UZSE" for code, _ in groups)
+    sources = "Yahoo Finance" + (" and parse.bot (UZSE)" if has_uzse else "")
     footer = f"Prices from {sources}."
     if ai_comment:
         footer += " Commentary is AI-generated and can be wrong."
     lines.append(f"\n<i>{footer} Not investment advice.</i>")
     return "\n".join(lines)
+
+
+def _group_by_market(quotes: list[Quote]) -> list[tuple[str, list[Quote]]]:
+    """Biggest holding group first; UZSE last, since it is the odd one out."""
+    grouped: dict[str, list[Quote]] = {}
+    for quote in quotes:
+        grouped.setdefault(quote.market, []).append(quote)
+    return sorted(
+        grouped.items(), key=lambda item: (item[0] == "UZSE", -len(item[1]), item[0])
+    )
+
+
+def _group_session(group: list[Quote]) -> str | None:
+    dates = [q.session_date for q in group if q.ok and q.session_date]
+    return max(dates) if dates else None
 
 
 def render_ticker_report(
@@ -156,7 +189,7 @@ def render_ticker_report(
             f"{escape(quote.error or 'data temporarily unavailable')}"
         )
 
-    parts = [MARKET_HEADINGS[quote.market], quote_lines(quote)]
+    parts = [market_heading(quote.market), quote_lines(quote)]
 
     # UZSE history is built up one snapshot a day, so early on the comparison
     # numbers do not exist yet. Say so rather than showing a silent dash.
@@ -219,11 +252,12 @@ def render_watchlist(entries, time_hint: str) -> str:
             "or an Uzbek one with <code>/add UZ:KVTS</code>."
         )
     lines = [f"<b>Watching {len(entries)} companies</b>"]
-    for market in ("US", "UZSE"):
-        group = [e for e in entries if e.market == market]
-        if not group:
-            continue
-        lines.append(f"\n{MARKET_HEADINGS[market]}")
+    by_market: dict[str, list] = {}
+    for entry in entries:
+        by_market.setdefault(entry.market, []).append(entry)
+    for market in sorted(by_market, key=lambda m: (m == UZSE.code, -len(by_market[m]), m)):
+        group = by_market[market]
+        lines.append(f"\n{market_heading(market)}")
         for entry in group:
             label = _short_name(entry.name, entry.ticker)
             lines.append(

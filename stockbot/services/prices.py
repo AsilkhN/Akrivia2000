@@ -19,6 +19,8 @@ from zoneinfo import ZoneInfo
 
 import yfinance as yf
 
+from ..markets import detect_market
+
 logger = logging.getLogger(__name__)
 
 NY = ZoneInfo("America/New_York")
@@ -39,7 +41,7 @@ class Quote:
     currency: str = "USD"
     session_date: str | None = None  # YYYY-MM-DD of the bar being reported
     is_live: bool = False  # True when that bar is today and still moving
-    market: str = "US"  # 'US' (Yahoo) or 'UZSE' (parse.bot)
+    market: str = "US"  # market code from stockbot.markets, or 'UZSE' 
     note: str | None = None  # short caveat shown under the numbers
     error: str | None = None
 
@@ -61,7 +63,11 @@ class PriceProvider:
         for ticker, result in zip(tickers, results):
             if isinstance(result, BaseException):
                 logger.warning("quote fetch crashed for %s: %s", ticker, result)
-                quotes[ticker] = Quote(ticker=ticker, error="data temporarily unavailable")
+                quotes[ticker] = Quote(
+                    ticker=ticker,
+                    error="data temporarily unavailable",
+                    market=detect_market(ticker).code,
+                )
             else:
                 quotes[ticker] = result
         return quotes
@@ -96,14 +102,19 @@ class PriceProvider:
             history = handle.history(period="1mo", interval="1d", auto_adjust=False)
         except Exception as exc:  # noqa: BLE001 - network/parse errors are expected
             logger.warning("history failed for %s: %s", ticker, exc)
-            return Quote(ticker=ticker, error="data temporarily unavailable")
+            return Quote(
+                ticker=ticker,
+                error="data temporarily unavailable",
+                market=detect_market(ticker).code,
+            )
 
+        market = detect_market(ticker).code
         if history is None or history.empty:
-            return Quote(ticker=ticker, error="unknown ticker or no data")
+            return Quote(ticker=ticker, error="unknown ticker or no data", market=market)
 
         closes = history["Close"].dropna()
         if closes.empty:
-            return Quote(ticker=ticker, error="no price data")
+            return Quote(ticker=ticker, error="no price data", market=market)
 
         last = float(closes.iloc[-1])
         prev = float(closes.iloc[-2]) if len(closes) >= 2 else None
@@ -123,6 +134,7 @@ class PriceProvider:
             currency=self._currency(handle),
             session_date=session_date,
             is_live=is_live,
+            market=detect_market(ticker).code,
         )
 
     @staticmethod

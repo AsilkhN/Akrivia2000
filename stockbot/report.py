@@ -7,6 +7,7 @@ import logging
 from dataclasses import dataclass
 
 from .formatting import money, render_report, render_ticker_report
+from .markets import market_by_code
 from .services.ai import AIClient
 from .services.prices import PriceProvider, Quote
 from .services.uzse import MARKET as UZSE_MARKET
@@ -54,46 +55,61 @@ class ReportBuilder:
         if not entries:
             return None
 
-        us_tickers = [e.ticker for e in entries if e.market != UZSE_MARKET]
+        yahoo_tickers = [e.ticker for e in entries if e.market != UZSE_MARKET]
         uz_tickers = [e.ticker for e in entries if e.market == UZSE_MARKET]
         names = {e.ticker: e.name for e in entries}
 
-        quotes_map, benchmark = await asyncio.gather(
-            self._prices.get_quotes(us_tickers),
-            self._prices.get_quote(self._benchmark_ticker),
+        quotes_map = await self._prices.get_quotes(yahoo_tickers)
+        quotes = sorted((quotes_map[t] for t in yahoo_tickers), key=_sort_key)
+
+        uz_quotes = sorted(
+            await self._uzse_quotes(uz_tickers, scheduled=scheduled), key=_sort_key
         )
-        quotes = [quotes_map[t] for t in us_tickers]
-        quotes.sort(key=_sort_key)
+        everything = quotes + uz_quotes
 
-        uz_quotes = await self._uzse_quotes(uz_tickers, scheduled=scheduled)
-        uz_quotes.sort(key=_sort_key)
-
-        for quote in quotes + uz_quotes:
+        for quote in everything:
             # Prefer the name captured at /add time; `.info` is slow and flaky.
             if names.get(quote.ticker):
                 quote.name = names[quote.ticker]
 
-        session_date, is_live = _session_state(quotes or uz_quotes)
-        uzse_session_date, _ = _session_state(uz_quotes)
+        benchmarks = await self._benchmarks_for(quotes)
+        session_date, is_live = _session_state(everything)
 
         headlines = await self._headlines_for_movers(quotes)
         comment = await self._ai.portfolio_comment(
-            facts=_facts_block(quotes + uz_quotes, benchmark),
+            facts=_facts_block(everything, benchmarks),
             headlines=_headlines_block(headlines),
         )
 
         return BuiltReport(
-            text=render_report(
-                quotes + uz_quotes,
-                benchmark,
-                comment,
-                session_date,
-                is_live,
-                uzse_session_date=uzse_session_date,
-            ),
+            text=render_report(everything, benchmarks, comment, session_date, is_live),
             session_date=session_date,
             is_live=is_live,
         )
+
+    async def _benchmarks_for(self, quotes: list[Quote]) -> dict[str, Quote]:
+        """One local index per market the user actually holds.
+
+        London gets the FTSE, Tokyo the Nikkei, and so on — comparing a Japanese
+        stock against the S&P would say nothing. Yahoo charges nothing for these,
+        and UZSE has no index to fetch.
+        """
+        wanted: dict[str, str] = {}
+        for quote in quotes:
+            market = market_by_code(quote.market)
+            symbol = market.benchmark
+            if symbol and market.code not in wanted:
+                # The configured benchmark overrides the default for the US, so
+                # BENCHMARK_TICKER=QQQ still works.
+                wanted[market.code] = (
+                    self._benchmark_ticker if market.code == "US" else symbol
+                )
+        if not wanted:
+            return {}
+
+        codes = list(wanted)
+        results = await self._prices.get_quotes([wanted[c] for c in codes])
+        return {code: results[wanted[code]] for code in codes}
 
     async def _uzse_quotes(self, tickers: list[str], *, scheduled: bool) -> list[Quote]:
         """UZSE quotes come from the cached snapshot; only `scheduled` may pay."""
@@ -188,24 +204,29 @@ def _session_state(quotes: list[Quote]) -> tuple[str | None, bool]:
     return newest.session_date, newest.is_live
 
 
-def _facts_block(quotes: list[Quote], benchmark: Quote | None) -> str:
+def _facts_block(quotes: list[Quote], benchmarks) -> str:
+    """Compact table for the model. Kept small on purpose: the free Groq tier
+    is limited by tokens per day, not just requests."""
     lines = []
     for quote in quotes:
         if not quote.ok:
             continue
         name = quote.name or quote.ticker
-        where = "UZSE, Uzbekistan" if quote.market == UZSE_MARKET else "US market"
+        where = market_by_code(quote.market).label
         line = f"{quote.ticker} ({name}, {where}): price {quote.price:.2f} {quote.currency}"
         if quote.day_change_pct is not None:
             line += f", day {quote.day_change_pct:+.2f}%"
         if quote.week_change_pct is not None:
             line += f", week {quote.week_change_pct:+.2f}%"
         lines.append(line)
-    if benchmark and benchmark.ok and benchmark.day_change_pct is not None:
-        lines.append(
-            f"{benchmark.ticker} (whole US market benchmark): "
-            f"day {benchmark.day_change_pct:+.2f}%"
-        )
+    if isinstance(benchmarks, Quote):
+        benchmarks = {benchmarks.market: benchmarks}
+    for code, index in (benchmarks or {}).items():
+        if index and index.ok and index.day_change_pct is not None:
+            lines.append(
+                f"{index.ticker} ({market_by_code(code).label} index): "
+                f"day {index.day_change_pct:+.2f}%"
+            )
     return "\n".join(lines) or "(no price data available)"
 
 
