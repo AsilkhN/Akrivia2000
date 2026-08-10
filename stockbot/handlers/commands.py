@@ -191,12 +191,7 @@ async def add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         quote = await _prices(context).resolve_ticker(ticker)
 
     if not quote.ok:
-        hint = (
-            "Check the symbol against the UZSE listing and try again."
-            if market == UZSE_MARKET
-            else "Check the ticker on finance.yahoo.com and try again."
-        )
-        await _reply(update, f"❌ <b>{ticker}</b> — {quote.error}.\n{hint}")
+        await _reply(update, f"❌ <b>{ticker}</b> — {quote.error}.{_add_hint(quote, market)}")
         return
 
     label = "🇺🇿 UZSE" if quote.market == UZSE_MARKET else "🇺🇸 US"
@@ -206,6 +201,20 @@ async def add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
     else:
         await _reply(update, f"<b>{quote.ticker}</b> is already on your list.")
+
+
+def _add_hint(quote, market: str) -> str:
+    """A "check the symbol" nudge is wrong when the data source is the problem.
+
+    Telling someone to verify a ticker that is perfectly valid sends them
+    looking in the wrong place, so configuration failures get no hint at all —
+    their message already says where to look.
+    """
+    if quote.error and ("PARSEBOT" in quote.error or "provider" in quote.error):
+        return ""
+    if market == UZSE_MARKET:
+        return "\nCheck the symbol against the UZSE listing and try again."
+    return "\nCheck that the ticker is spelled correctly and try again."
 
 
 def _parse_ticker_argument(

@@ -286,3 +286,19 @@ def test_known_tickers_come_from_the_cache_for_free(storage):
     storage.save_cache("securities", SECURITIES, None)
     assert {"KVTS", "UZMK", "UZMT", "MXUS"} <= provider.known_tickers()
     assert provider.credits_remaining() == 200
+
+
+def test_configuration_errors_do_not_tell_you_to_check_the_symbol():
+    """Sending someone to verify a valid ticker hides the real problem."""
+    from stockbot.handlers.commands import _add_hint
+    from stockbot.services.prices import Quote
+
+    broken_config = Quote(
+        ticker="KVTS",
+        error="no UZSE data yet — check PARSEBOT_QUOTES_URL and the server logs",
+        market="UZSE",
+    )
+    assert _add_hint(broken_config, "UZSE") == ""
+
+    unknown_symbol = Quote(ticker="NOPE", error="not listed on UZSE", market="UZSE")
+    assert "UZSE listing" in _add_hint(unknown_symbol, "UZSE")
