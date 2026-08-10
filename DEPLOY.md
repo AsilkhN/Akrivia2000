@@ -226,6 +226,16 @@ cached. Zero credits means the monthly limit is spent; it resets next month.
 always a bad value in `.env`; the bot validates config at startup and says which
 variable is wrong.
 
+**`sqlite3.OperationalError: unable to open database file`** — the mounted
+`./data` directory is not writable by the container's user. The entrypoint fixes
+this automatically, so on a current image you should not see it. If you are
+running an older build:
+
+```bash
+sudo chown -R 10001:10001 data
+docker compose up -d --build
+```
+
 ## Running without Docker
 
 ```bash
