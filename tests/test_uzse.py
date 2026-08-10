@@ -269,7 +269,15 @@ def test_unknown_uzse_ticker_is_reported_not_raised(storage):
     provider = make_provider(storage)
     storage.save_cache("quotes", QUOTES, "2026-08-10")
     quote = provider.get_quote("NOSUCH")
-    assert not quote.ok and "UZSE" in (quote.error or "")
+    assert not quote.ok and quote.error == "not listed on UZSE"
+
+
+def test_an_empty_cache_blames_the_configuration_not_the_ticker(storage):
+    """A failed fetch must not send the reader off to check a valid symbol."""
+    provider = make_provider(storage)
+    quote = provider.get_quote("KVTS")
+    assert not quote.ok
+    assert "PARSEBOT_QUOTES_URL" in (quote.error or "")
 
 
 def test_known_tickers_come_from_the_cache_for_free(storage):

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -24,6 +25,14 @@ from ..markets import detect_market
 logger = logging.getLogger(__name__)
 
 NY = ZoneInfo("America/New_York")
+
+# yfinance caches timezone lookups next to the user's home directory and logs a
+# noisy failure for every concurrent thread that races to create it. Point it at
+# the data volume, which is guaranteed writable.
+try:  # pragma: no cover - depends on the yfinance build
+    yf.set_tz_cache_location(os.environ.get("YF_CACHE_DIR", "/app/data/.cache"))
+except Exception:  # noqa: BLE001 - purely cosmetic, never worth failing over
+    pass
 
 # Quotes are cached briefly so that ten users asking for the same ticker in the
 # same minute cause one network call, not ten.
