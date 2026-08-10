@@ -1,0 +1,19 @@
+services:
+  bot:
+    build: .
+    image: akrivia2000:latest
+    container_name: akrivia2000
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # Everything worth keeping lives here: watchlists, accumulated UZSE price
+      # history, and the parse.bot credit counter. Without this mount a redeploy
+      # silently resets all three.
+      - ./data:/app/data
+    logging:
+      driver: json-file
+      options:
+        # Without a cap the log grows until the disk is full — the classic way
+        # a long-running bot dies months later.
+        max-size: "10m"
+        max-file: "3"

@@ -112,24 +112,14 @@ Then open your bot in Telegram and send `/start`.
 
 ### Running on a server
 
-With Docker:
-
 ```bash
-docker build -t akrivia2000 .
-docker run -d --restart=unless-stopped \
-  --env-file .env -v "$PWD/data:/app/data" --name akrivia2000 akrivia2000
+cp .env.example .env    # fill in the keys
+docker compose up -d --build
+docker compose logs -f
 ```
 
-Or as a systemd service — any always-on process works. The bot uses long
-polling, so it needs no public address, no domain and no HTTPS certificate.
-
-Two things matter in production:
-
-- **`DATABASE_PATH` must be on persistent storage.** It holds the watchlists.
-  Free hosts with an ephemeral filesystem will wipe it on every deploy.
-- **Set `HEARTBEAT_URL`** to a free [healthchecks.io](https://healthchecks.io)
-  check. It is pinged after every successful report, so you get told if the
-  bot ever goes quiet — otherwise a stopped bot looks exactly like a quiet day.
+The bot uses long polling, so it needs no domain, no open port and no
+certificate. Full instructions, backups and troubleshooting: **[DEPLOY.md](DEPLOY.md)**.
 
 ## How it works
 
