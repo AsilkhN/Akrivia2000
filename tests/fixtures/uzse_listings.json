@@ -1,0 +1,12 @@
+{
+  "status": "success",
+  "data": {
+    "search_query": "",
+    "total": 3,
+    "listings": [
+      {"number": "1", "category": "Premium", "ticker": "URTS", "security_code": "UZ7043200003", "issuer": "<O'zRTXB> AJ", "listing_date": "25.12.2014", "currency": "UZS", "nominal_value": "630", "shares_count": "374,792,100", "current_price": "Перейти"},
+      {"number": "35", "category": "Standard", "ticker": "KVTS", "security_code": "UZ7025770007", "issuer": "<Kvarts> AJ", "listing_date": "04.12.2015", "currency": "UZS", "nominal_value": "1,715", "shares_count": "96,449,218", "current_price": "Перейти"},
+      {"number": "4", "category": "Bond", "ticker": "IMKF3", "security_code": "UZ7056960014", "issuer": "<IMKON FINANS MIKROMOLIYA TASHKILOTI> AJ", "listing_date": "10.04.2023", "currency": "UZS", "nominal_value": "0", "shares_count": "0", "current_price": "Перейти"}
+    ]
+  }
+}
