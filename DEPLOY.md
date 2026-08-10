@@ -4,6 +4,92 @@ The bot uses **long polling**, so it needs no domain, no open port, no reverse
 proxy and no TLS certificate. Any always-on Linux box with Docker works — a
 €4/month VPS is plenty.
 
+## 0. Preparing a fresh Ubuntu server
+
+Skip this if the box is already set up. Order matters: the SSH key must be
+proven to work *before* password login is turned off.
+
+```bash
+# --- as root, first login ---
+apt update && apt upgrade -y
+
+adduser bot                      # pick a strong password
+usermod -aG sudo bot
+```
+
+On **your own machine**, create a key if you have none and copy it over:
+
+```bash
+ssh-keygen -t ed25519            # press Enter through the prompts
+ssh-copy-id bot@SERVER_IP
+```
+
+Now open a **second terminal** and confirm `ssh bot@SERVER_IP` works without a
+password. Keep the first session open until it does — this is the step where
+people lock themselves out.
+
+```bash
+# --- back on the server, as bot ---
+sudo nano /etc/ssh/sshd_config
+```
+
+Set these three:
+
+```
+PermitRootLogin no
+PasswordAuthentication no
+PubkeyAuthentication yes
+```
+
+```bash
+sudo systemctl restart ssh
+```
+
+Firewall — the bot polls outward and needs no inbound port at all, so SSH is
+the only thing to open:
+
+```bash
+sudo apt install -y ufw
+sudo ufw allow OpenSSH
+sudo ufw --force enable
+```
+
+Automatic security updates, so the box does not rot:
+
+```bash
+sudo apt install -y unattended-upgrades
+sudo dpkg-reconfigure -plow unattended-upgrades
+```
+
+Swap — on a 1 GB box, `pip install` unpacking pandas is the heaviest moment in
+this bot's life and can be OOM-killed without it:
+
+```bash
+sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
+sudo mkswap /swapfile && sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+```
+
+Server clock — only affects how logs read, since the bot computes every
+schedule in each user's own timezone:
+
+```bash
+sudo timedatectl set-timezone Asia/Tashkent
+```
+
+Docker, from Ubuntu's own repositories:
+
+```bash
+sudo apt install -y docker.io docker-compose-v2 git
+sudo usermod -aG docker $USER
+```
+
+Log out and back in so the group membership applies, then check:
+
+```bash
+docker run --rm hello-world
+```
+
 ## 1. Get the code onto the server
 
 ```bash
@@ -92,6 +178,15 @@ docker compose exec bot python -c \
 
 Copying the `.db` file with `cp` while the bot is writing can produce a corrupt
 copy; the command above cannot.
+
+**1b. Automate the backup.** `crontab -e`, then:
+
+```
+0 3 * * * cd ~/Akrivia2000 && docker compose exec -T bot python -c "import sqlite3,os; s=sqlite3.connect(os.environ.get('DATABASE_PATH','data/stockbot.db')); d=sqlite3.connect('data/backup.db'); s.backup(d); d.close()"
+```
+
+A nightly copy next to the live database. Pull it down periodically with `scp`
+so a dead disk does not take both.
 
 **2. Set `HEARTBEAT_URL`.** Create a free check at
 [healthchecks.io](https://healthchecks.io) and paste its ping URL. The bot pings
