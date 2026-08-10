@@ -35,6 +35,8 @@ The list is concentrated in semiconductors, so these names tend to move together
 | `/list` | Everything you follow |
 | `/now` | Send the report immediately |
 | `/ai NVDA` | Longer plain-English briefing on one company |
+| `/scout` | What is happening across the whole Uzbek exchange |
+| `/scout week` | The same, covering the past week |
 | `/settime 09:00` | When the daily report arrives |
 | `/settz Europe/Berlin` | Your timezone |
 | `/pause`, `/resume` | Stop or restart daily reports |
@@ -45,19 +47,20 @@ The list is concentrated in semiconductors, so these names tend to move together
 
 US stocks come from Yahoo Finance (no key, no quota). Uzbek stocks come from a
 **parse.bot** scraper, which is metered — a fixed number of requests per month.
-The bot never mixes them: separate sections, separate currencies, separate
-trading calendars, and the "on average" line covers US stocks only.
+Yahoo covers about seventy exchanges, and the report groups by venue: London,
+Frankfurt, Tokyo and crypto each get their own section, their own average and
+their own local index. Markets are never blended — a dollar holding and a yen
+holding averaged together would describe nothing real.
 
-Three of the five parse.bot endpoints are used, picked by what each costs:
+All five parse.bot endpoints are used, each at a cadence matched to its cost:
 
 | Endpoint | Gives | Called |
 | --- | --- | --- |
-| quotes | the whole market in one response | once per trading day |
-| securities | ticker → official company name | once per 30 days |
-| detail | 20 sessions of history, day range, volume for one company | only by `/ai`, once per company per day |
-
-The market-wide trade tape and the listings table add nothing the report needs,
-so they are never called.
+| `get_stock_quotes` | the whole market in one response | once per trading day |
+| `get_trade_results` | the trade tape: money actually traded | once per scouting window |
+| `get_stock_detail` | 20 sessions of history, day range, volume | only by `/ai`, once per company per day |
+| `get_listings` | share counts and category (company size, bonds) | once per 30 days |
+| `get_securities` | ticker → official company name | once per 30 days |
 
 Spending stays low by design:
 
@@ -74,7 +77,7 @@ Spending stays low by design:
   back so a burst of `/now` can never starve the daily report. `/status` shows
   what is left.
 
-Around 22 trading days a month means roughly 22 of 200 requests used.
+Around 40 of 200 requests a month in normal use.
 
 Two things about this exchange the code handles explicitly:
 
@@ -97,7 +100,8 @@ commentary. Without it everything else still works.
 
 Price data for US stocks needs no key — it comes from Yahoo Finance via
 `yfinance`. For Uzbek stocks, add your **parse.bot** endpoint and key
-(`PARSEBOT_API_URL`, `PARSEBOT_API_KEY`); leave them empty to run US-only.
+endpoints and key (`PARSEBOT_QUOTES_URL`, `PARSEBOT_API_KEY`, and the others
+listed in `.env.example`); leave them empty to run US-only.
 
 **3. Configure and run.**
 
@@ -127,12 +131,15 @@ certificate. Full instructions, backups and troubleshooting: **[DEPLOY.md](DEPLO
 main.py                      entry point, wiring, long polling
 stockbot/
 ├── config.py                environment variables → validated Config
-├── storage.py               SQLite: users, settings, watchlists
+├── storage.py               SQLite: users, settings, watchlists, price history
+├── markets.py               ticker suffix → exchange, and its local index
 ├── formatting.py            Telegram message rendering
 ├── report.py                combines prices + news + AI into one report
+├── scout.py                 whole-exchange scan: turnover ranking, noise filter
 ├── services/
 │   ├── prices.py            Yahoo Finance, cached, one failing ticker is isolated
-│   ├── uzse.py              parse.bot scraper: budget guard, day cache, parser
+│   ├── uzse.py              parse.bot: budget guard, day cache, parsers
+│   ├── news.py              Uzbek RSS, matched to companies by name
 │   └── ai.py                Groq commentary (optional, never fatal)
 └── handlers/
     ├── commands.py          /add, /remove, /now, /ai, …
@@ -154,6 +161,9 @@ Design decisions worth knowing:
   line; a Groq outage removes the commentary; neither stops the report.
 - **Prices sit behind `PriceProvider`,** so swapping Yahoo for Finnhub or Twelve
   Data later means rewriting one file.
+- **The scout ranks by money traded, never by percentage.** On UZSE a share at
+  0.01 sums moves 100% on one trade; ranking by percent would fill every report
+  with noise. Rows below a turnover floor are shown *as* noise instead.
 
 ## Tests
 
