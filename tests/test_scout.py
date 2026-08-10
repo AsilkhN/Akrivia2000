@@ -285,3 +285,51 @@ async def test_a_young_database_does_not_call_every_share_newly_listed(storage, 
 
     tags = [tag for row in report.movers for tag in row.tags]
     assert "newly listed" not in tags
+
+
+# -- /add with several tickers ----------------------------------------------
+
+
+def test_add_result_lists_what_happened_to_each_ticker():
+    from stockbot.handlers.commands import _render_add_result
+    from stockbot.services.prices import Quote
+
+    class Cfg:
+        max_tickers_per_user = 25
+
+    added = [
+        Quote(ticker="ONTO", name="Onto Innovation", market="US"),
+        Quote(ticker="KVTS", name="Kvarts AJ", market="UZSE"),
+    ]
+    text = _render_add_result(
+        added, ["NOW"], [("MANE", "unknown ticker or no data", "US")], [], Cfg
+    )
+    assert "Now following 2" in text
+    assert "Onto Innovation" in text and "Kvarts AJ" in text
+    assert "Already on your list: NOW" in text
+    assert "MANE" in text and "unknown ticker" in text
+
+
+def test_add_blames_the_provider_when_every_ticker_fails():
+    """Seven failures at once is a data source problem, not seven typos."""
+    from stockbot.handlers.commands import _render_add_result
+
+    class Cfg:
+        max_tickers_per_user = 25
+
+    failed = [(t, "data temporarily unavailable", "US") for t in ("ONTO", "CRDO", "ALAB")]
+    text = _render_add_result([], [], failed, [], Cfg)
+    assert "price provider is probably" in text
+
+
+def test_add_says_which_tickers_did_not_fit():
+    from stockbot.handlers.commands import _render_add_result
+    from stockbot.services.prices import Quote
+
+    class Cfg:
+        max_tickers_per_user = 2
+
+    text = _render_add_result(
+        [Quote(ticker="ONTO", name="Onto", market="US")], [], [], [("NOW", "US")], Cfg
+    )
+    assert "list is full at 2" in text and "NOW" in text

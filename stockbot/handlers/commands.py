@@ -12,9 +12,9 @@ from telegram.constants import ChatAction, ParseMode
 from telegram.ext import ContextTypes
 
 from ..config import Config, is_valid_hhmm
-from ..formatting import render_status, render_watchlist, split_message
+from ..formatting import escape, render_status, render_watchlist, split_message
 from ..report import ReportBuilder
-from ..services.prices import PriceProvider
+from ..services.prices import PriceProvider, Quote
 from ..services.uzse import MARKET as UZSE_MARKET
 from ..services.uzse import UzseProvider
 from ..storage import Storage
@@ -27,7 +27,7 @@ much it moved that day and over the week, and a plain-English note explaining
 what happened.
 
 <b>Commands</b>
-/add <code>TICKER</code> — follow a US company (e.g. <code>/add NVDA</code>)
+/add <code>TICKER …</code> — follow companies (e.g. <code>/add NVDA ONTO CRDO</code>)
 /add <code>UZ:TICKER</code> — follow an Uzbek one (e.g. <code>/add UZ:KVTS</code>)
 /remove <code>TICKER</code> — stop following it
 /list — everything you follow right now
@@ -159,16 +159,28 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Follow one company or several: /add ONTO CRDO UZ:KVTS
+
+    Several at once is the common case when setting up, and batching matters:
+    Twelve Data fetches the whole list in a single request, so seven companies
+    cost one request rather than seven against a metered plan.
+    """
     config = _config(context)
     storage = _storage(context)
     chat_id = update.effective_chat.id
     _ensure_user(context, chat_id)
 
     if not context.args:
-        await _reply(update, "Usage: <code>/add NVDA</code>")
+        await _reply(
+            update,
+            "Usage: <code>/add NVDA</code>\n"
+            "Several at once: <code>/add ONTO CRDO ALAB</code>\n"
+            "Uzbek companies: <code>/add UZ:KVTS</code>",
+        )
         return
 
-    if storage.count_tickers(chat_id) >= config.max_tickers_per_user:
+    room = config.max_tickers_per_user - storage.count_tickers(chat_id)
+    if room <= 0:
         await _reply(
             update,
             f"You already follow {config.max_tickers_per_user} companies — "
@@ -176,31 +188,87 @@ async def add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
-    ticker, market = _parse_ticker_argument(context, context.args[0])
-    await update.effective_chat.send_action(ChatAction.TYPING)
+    requested = [_parse_ticker_argument(context, arg) for arg in context.args]
+    # Keep the order typed, but drop repeats so one typo does not cost two slots.
+    seen: set[str] = set()
+    requested = [r for r in requested if not (r[0] in seen or seen.add(r[0]))]
 
-    if market == UZSE_MARKET:
+    truncated = requested[room:]
+    requested = requested[:room]
+
+    await update.effective_chat.send_action(ChatAction.TYPING)
+    quotes = await _resolve_many(context, requested)
+
+    added, already, failed = [], [], []
+    for ticker, market in requested:
+        quote = quotes.get(ticker)
+        if quote is None or not quote.ok:
+            reason = quote.error if quote else "could not be checked"
+            failed.append((ticker, reason, market))
+        elif storage.add_ticker(chat_id, quote.ticker, quote.name, quote.market):
+            added.append(quote)
+        else:
+            already.append(quote.ticker)
+
+    await _reply(
+        update, _render_add_result(added, already, failed, truncated, config)
+    )
+
+
+async def _resolve_many(context: ContextTypes.DEFAULT_TYPE, requested):
+    """Validate every requested ticker, batching by market."""
+    uzse_tickers = [t for t, m in requested if m == UZSE_MARKET]
+    other_tickers = [t for t, m in requested if m != UZSE_MARKET]
+
+    quotes: dict = {}
+    if other_tickers:
+        quotes.update(await _prices(context).get_quotes(other_tickers))
+
+    if uzse_tickers:
         uzse = _uzse(context)
         if uzse is None or not uzse.enabled:
-            await _reply(update, "UZSE data is not configured on the server.")
-            return
-        # Validated against the cached snapshot, so adding a ticker is free.
-        await uzse.ensure_quotes(scheduled=False)
-        quote = uzse.get_quote(ticker)
-    else:
-        quote = await _prices(context).resolve_ticker(ticker)
+            for ticker in uzse_tickers:
+                quotes[ticker] = Quote(
+                    ticker=ticker,
+                    market=UZSE_MARKET,
+                    error="UZSE data is not configured on the server",
+                )
+        else:
+            # Validated against the cached snapshot, so this costs nothing.
+            await uzse.ensure_quotes(scheduled=False)
+            for ticker in uzse_tickers:
+                quotes[ticker] = uzse.get_quote(ticker)
+    return quotes
 
-    if not quote.ok:
-        await _reply(update, f"❌ <b>{ticker}</b> — {quote.error}.{_add_hint(quote, market)}")
-        return
 
-    label = "🇺🇿 UZSE" if quote.market == UZSE_MARKET else "🇺🇸 US"
-    if storage.add_ticker(chat_id, quote.ticker, quote.name, quote.market):
-        await _reply(
-            update, f"✅ Now following <b>{quote.ticker}</b> — {quote.name} ({label})."
+def _render_add_result(added, already, failed, truncated, config) -> str:
+    lines = []
+    if added:
+        listed = "\n".join(
+            f"• <b>{escape(q.ticker)}</b> — {escape(q.name or q.ticker)} "
+            f"({'🇺🇿 UZSE' if q.market == UZSE_MARKET else '🇺🇸 ' + q.market})"
+            for q in added
         )
-    else:
-        await _reply(update, f"<b>{quote.ticker}</b> is already on your list.")
+        lines.append(f"✅ <b>Now following {len(added)}:</b>\n{listed}")
+    if already:
+        lines.append(f"\nAlready on your list: {', '.join(escape(t) for t in already)}")
+    if failed:
+        problems = "\n".join(
+            f"• <b>{escape(t)}</b> — {escape(reason or 'no data')}" for t, reason, _ in failed
+        )
+        lines.append(f"\n❌ <b>Could not add:</b>\n{problems}")
+        if not added:
+            # Everything failing points at the data source, not the symbols.
+            lines.append(
+                "\n<i>If none of these worked, the price provider is probably "
+                "unreachable — the server logs will say why.</i>"
+            )
+    if truncated:
+        names = ", ".join(escape(t) for t, _ in truncated)
+        lines.append(
+            f"\n⚠️ Not added, list is full at {config.max_tickers_per_user}: {names}"
+        )
+    return "\n".join(lines) if lines else "Nothing to add."
 
 
 def _add_hint(quote, market: str) -> str:
