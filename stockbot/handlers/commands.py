@@ -12,7 +12,7 @@ from telegram.constants import ChatAction, ParseMode
 from telegram.ext import ContextTypes
 
 from ..config import Config, is_valid_hhmm
-from ..formatting import render_watchlist, split_message
+from ..formatting import render_status, render_watchlist, split_message
 from ..report import ReportBuilder
 from ..services.prices import PriceProvider
 from ..services.uzse import MARKET as UZSE_MARKET
@@ -328,25 +328,28 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     config = _config(context)
 
     local_now = datetime.now(ZoneInfo(user.timezone)).strftime("%H:%M")
-    lines = [
-        "<b>Your settings</b>",
-        f"Companies followed: <b>{storage.count_tickers(chat_id)}</b>",
-        f"Daily report: <b>{user.digest_time}</b> ({user.timezone}, now {local_now})",
-        f"Reports: <b>{'on' if user.enabled else 'paused'}</b>",
-        f"AI commentary: <b>{'on' if config.ai_enabled else 'off'}</b>",
-        f"Last report sent for session: <b>{user.last_session_sent or 'none yet'}</b>",
-    ]
-
     uzse = _uzse(context)
+    uzse_status = None
     if uzse is not None and uzse.enabled:
-        cached = "yes" if uzse.snapshot_is_fresh() else "not yet today"
-        lines.append(
-            f"\n🇺🇿 <b>UZSE data (parse.bot)</b>\n"
-            f"Credits left this month: <b>{uzse.credits_remaining()}</b> "
-            f"of {config.parsebot_monthly_limit}\n"
-            f"Today's snapshot cached: <b>{cached}</b>"
-        )
-    await _reply(update, "\n".join(lines))
+        uzse_status = {
+            "remaining": uzse.credits_remaining(),
+            "limit": config.parsebot_monthly_limit,
+            "cached": uzse.snapshot_is_fresh(),
+        }
+
+    await _reply(
+        update,
+        render_status(
+            followed=storage.count_tickers(chat_id),
+            digest_time=user.digest_time,
+            timezone=user.timezone,
+            local_now=local_now,
+            enabled=user.enabled,
+            ai_enabled=config.ai_enabled,
+            last_session_sent=user.last_session_sent,
+            uzse=uzse_status,
+        ),
+    )
 
 
 async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

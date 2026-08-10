@@ -182,6 +182,35 @@ def render_ticker_report(
     return "\n".join(parts)
 
 
+def render_status(
+    *,
+    followed: int,
+    digest_time: str,
+    timezone: str,
+    local_now: str,
+    enabled: bool,
+    ai_enabled: bool,
+    last_session_sent: str | None,
+    uzse: dict | None = None,
+) -> str:
+    lines = [
+        "<b>Your settings</b>",
+        f"Companies followed: <b>{followed}</b>",
+        f"Daily report: <b>{escape(digest_time)}</b> "
+        f"({escape(timezone)}, now {escape(local_now)})",
+        f"Reports: <b>{'on' if enabled else 'paused'}</b>",
+        f"AI commentary: <b>{'on' if ai_enabled else 'off'}</b>",
+        f"Last report sent for session: <b>{escape(last_session_sent or 'none yet')}</b>",
+    ]
+    if uzse:
+        lines.append(
+            "\n🇺🇿 <b>UZSE data (parse.bot)</b>\n"
+            f"Credits left this month: <b>{uzse['remaining']}</b> of {uzse['limit']}\n"
+            f"Today's snapshot cached: <b>{'yes' if uzse['cached'] else 'not yet today'}</b>"
+        )
+    return "\n".join(lines)
+
+
 def render_watchlist(entries, time_hint: str) -> str:
     if not entries:
         return (

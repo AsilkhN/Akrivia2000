@@ -3,6 +3,7 @@ from stockbot.formatting import (
     percent,
     quote_lines,
     render_report,
+    render_status,
     render_watchlist,
     split_message,
     trend_emoji,
@@ -137,3 +138,22 @@ def test_split_message_respects_limit_and_keeps_content():
 
 def test_split_message_leaves_short_text_alone():
     assert split_message("hello") == ["hello"]
+
+
+def test_status_hides_the_uzse_block_when_not_configured():
+    text = render_status(
+        followed=7, digest_time="09:00", timezone="Asia/Tashkent", local_now="17:05",
+        enabled=True, ai_enabled=True, last_session_sent=None,
+    )
+    assert "none yet" in text
+    assert "parse.bot" not in text
+
+
+def test_status_shows_remaining_credits_when_uzse_is_on():
+    text = render_status(
+        followed=10, digest_time="09:00", timezone="Asia/Tashkent", local_now="17:05",
+        enabled=False, ai_enabled=True, last_session_sent="2026-08-07",
+        uzse={"remaining": 191, "limit": 200, "cached": True},
+    )
+    assert "paused" in text
+    assert "<b>191</b> of 200" in text
