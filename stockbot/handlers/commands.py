@@ -33,6 +33,8 @@ what happened.
 /list — everything you follow right now
 /now — send the report immediately
 /ai <code>TICKER</code> — a longer plain-English briefing on one company
+/scout — what is happening across the whole Uzbek exchange
+/scout <code>week</code> — the same, covering the past week
 /settime <code>HH:MM</code> — when the daily report arrives
 /settz <code>Area/City</code> — your timezone (e.g. <code>Europe/Berlin</code>)
 /pause and /resume — stop or restart the daily report
@@ -52,7 +54,13 @@ US companies are listed under 🇺🇸 and priced in dollars; Uzbek ones under �
 and priced in sums. They trade on different calendars and hours, so they are
 never averaged together. UZSE data comes from a metered scraper — the bot
 fetches the whole exchange once a day and answers everything else from that
-copy. /status shows how many fetches are left this month."""
+copy. /status shows how many fetches are left this month.
+
+<b>Scouting</b>
+/scout looks at every company on the Uzbek exchange, not only your list, because
+those are the shares you can actually buy locally. It ranks by the money that
+changed hands rather than by percentage: on a market this small, a 40% jump on
+two hundred sums means nothing, and the report says so out loud."""
 
 
 def _config(context: ContextTypes.DEFAULT_TYPE) -> Config:
@@ -265,6 +273,15 @@ async def ai_briefing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await update.effective_chat.send_action(ChatAction.TYPING)
     ticker, market = _parse_ticker_argument(context, context.args[0])
     text = await _reports(context).build_ticker_report(ticker, market)
+    await _reply(update, text)
+
+
+async def scout(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Scan the whole Uzbek exchange, not just the watchlist."""
+    _ensure_user(context, update.effective_chat.id)
+    period = "weekly" if context.args and context.args[0].lower().startswith("w") else "daily"
+    await update.effective_chat.send_action(ChatAction.TYPING)
+    text, _ = await _reports(context).build_scout_report(period)
     await _reply(update, text)
 
 

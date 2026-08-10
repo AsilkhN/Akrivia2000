@@ -1,15 +1,17 @@
 """Uzbek Stock Exchange (UZSE) data via parse.bot scrapers.
 
-Five endpoints are available; this module uses three, chosen by what each one
-costs against a metered plan:
+All five scraper endpoints are used, each at a cadence matched to what it costs
+against a metered plan:
 
-  quotes      whole market in one response — the daily workhorse, 1 request/day
-  securities  ticker → official company name, changes rarely — 1 request/month
-  detail      one company: 20 sessions of history, day range, volume — 1 request
-              per /ai, on demand only
-
-The remaining two (market-wide trade tape, listing categories) add nothing the
-report needs and are not called.
+  get_stock_quotes   whole market in one response — the daily workhorse, 1/day
+  get_securities     ticker → official company name — reference data, 1/month
+  get_stock_detail   one company: 20 sessions of history, day range, volume —
+                     1 per /ai, on demand only
+  get_listings       share counts and listing category, which give company size
+                     and separate shares from bonds — 1/month
+  get_trade_results  the trade tape: money actually changing hands, which is the
+                     only honest way to rank a move on a market this thin — 1
+                     per scouting window
 
 Spending rules, enforced in code rather than by discipline:
 
@@ -47,6 +49,7 @@ TIMEOUT_SECONDS = 60
 
 CACHE_QUOTES = "quotes"
 CACHE_SECURITIES = "securities"
+CACHE_LISTINGS = "listings"
 
 # This exchange formats numbers US-style: "16,100" is sixteen thousand, not
 # sixteen. Getting this wrong understates a price by a factor of a thousand,
@@ -63,6 +66,32 @@ class UzseQuote:
     closing_price: float | None
     last_trade_price: float | None
     last_trade_date: str | None  # ISO
+
+
+@dataclass
+class UzseTrade:
+    ticker: str | None
+    security_code: str | None
+    issuer: str | None
+    price: float | None
+    quantity: float | None
+    volume: float | None  # money changing hands, in UZS
+
+
+@dataclass
+class UzseListing:
+    ticker: str
+    security_code: str | None
+    issuer: str | None
+    category: str | None  # Premium / Standard / Bond / Privatizatsiya
+    nominal_value: float | None
+    shares_count: float | None
+    listing_date: str | None
+
+    @property
+    def is_share(self) -> bool:
+        """Bonds are listed alongside shares and are not what we scout for."""
+        return (self.category or "").strip().lower() != "bond"
 
 
 @dataclass
@@ -92,6 +121,8 @@ class UzseProvider:
         reserve: int,
         securities_url: str = "",
         detail_url: str = "",
+        trades_url: str = "",
+        listings_url: str = "",
         auth_header: str = "Authorization",
         auth_scheme: str = "Bearer",
         method: str = "GET",
@@ -100,6 +131,8 @@ class UzseProvider:
         self._quotes_url = quotes_url
         self._securities_url = securities_url
         self._detail_url = detail_url
+        self._trades_url = trades_url
+        self._listings_url = listings_url
         self._api_key = api_key
         self._monthly_limit = monthly_limit
         self._reserve = reserve
@@ -235,6 +268,61 @@ class UzseProvider:
             return False
         self._storage.save_cache(CACHE_SECURITIES, payload, None)
         return True
+
+    async def fetch_trades(
+        self, date_from: str, date_to: str, *, scheduled: bool = False
+    ) -> list[UzseTrade]:
+        """The trade tape for a date range — who actually moved money.
+
+        On an exchange this thin, turnover is the only honest way to rank a
+        move: a 40% jump on two hundred sums is noise, and percentage alone
+        cannot tell the difference.
+
+        The endpoint caps its response, so this may cover only the largest or
+        most recent trades in the window. `trades_coverage` reports what came
+        back so the report can say so rather than implying completeness.
+        """
+        key = f"trades:{date_from}:{date_to}"
+        if not self._cache_is_fresh(key):
+            if not self._trades_url or not self._can_spend(scheduled=scheduled):
+                cached = self._storage.load_cache(key)
+                return parse_trades(cached[0]) if cached else []
+            url = self._trades_url.format(date_from=date_from, date_to=date_to)
+            payload = await self._request(url)
+            if payload is not None:
+                self._storage.save_cache(key, payload, date_to)
+                return parse_trades(payload)
+        cached = self._storage.load_cache(key)
+        return parse_trades(cached[0]) if cached else []
+
+    async def ensure_listings(self, *, scheduled: bool = False) -> bool:
+        """Share counts and listing categories. Refreshed at most monthly.
+
+        Multiplying `shares_count` by the price gives a company's market value,
+        which is what separates a real business from a shell that happens to
+        have moved 20%.
+        """
+        if not self._listings_url or not self._api_key:
+            return False
+        cached = self._storage.load_cache(CACHE_LISTINGS)
+        if cached is not None:
+            try:
+                if (datetime.utcnow() - datetime.fromisoformat(cached[1])).days < 30:
+                    return False
+            except ValueError:
+                pass
+        if not self._can_spend(scheduled=scheduled):
+            return False
+
+        payload = await self._request(self._listings_url)
+        if payload is None:
+            return False
+        self._storage.save_cache(CACHE_LISTINGS, payload, None)
+        return True
+
+    def listings(self) -> dict[str, UzseListing]:
+        cached = self._storage.load_cache(CACHE_LISTINGS)
+        return parse_listings(cached[0]) if cached else {}
 
     async def _request(self, url: str) -> str | None:
         headers = {self._auth_header: f"{self._auth_scheme} {self._api_key}".strip()}
@@ -457,6 +545,68 @@ def parse_detail(raw: str) -> UzseDetail:
         issue_value=to_float(data.get("issue_value")),
         history=history,
     )
+
+
+def parse_trades(raw: str) -> list[UzseTrade]:
+    """The trade tape. `security_code` arrives with the ticker glued on the end
+    (UZ7058980010UZNF), so the ticker is recovered from that suffix."""
+    rows = _payload(raw).get("trades") or _payload(raw).get("recent_trades")
+    if not isinstance(rows, list):
+        return []
+    trades: list[UzseTrade] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        code = str(row.get("security_code") or "")
+        trades.append(
+            UzseTrade(
+                ticker=_ticker_from_code(code),
+                security_code=code[:12] or None,
+                issuer=_clean_company(row.get("issuer")),
+                price=to_float(row.get("trade_price")),
+                quantity=to_float(row.get("quantity")),
+                volume=to_float(row.get("volume")),
+            )
+        )
+    return trades
+
+
+def turnover_by_ticker(trades: list[UzseTrade]) -> dict[str, float]:
+    """Money traded per company, summed across the tape."""
+    totals: dict[str, float] = {}
+    for trade in trades:
+        if trade.ticker and trade.volume:
+            totals[trade.ticker] = totals.get(trade.ticker, 0.0) + trade.volume
+    return totals
+
+
+def _ticker_from_code(code: str) -> str | None:
+    """UZ7058980010UZNF → UZNF. ISIN-style codes are 12 characters."""
+    text = code.strip().upper()
+    if len(text) > 12:
+        return text[12:] or None
+    return None
+
+
+def parse_listings(raw: str) -> dict[str, UzseListing]:
+    rows = _payload(raw).get("listings")
+    if not isinstance(rows, list):
+        return {}
+    listings: dict[str, UzseListing] = {}
+    for row in rows:
+        if not isinstance(row, dict) or not row.get("ticker"):
+            continue
+        ticker = str(row["ticker"]).strip().upper()
+        listings[ticker] = UzseListing(
+            ticker=ticker,
+            security_code=row.get("security_code") or None,
+            issuer=_clean_company(row.get("issuer")),
+            category=row.get("category") or None,
+            nominal_value=to_float(row.get("nominal_value")),
+            shares_count=to_float(row.get("shares_count")),
+            listing_date=_iso_date(row.get("listing_date")),
+        )
+    return listings
 
 
 def _clean_company(name: str | None) -> str | None:

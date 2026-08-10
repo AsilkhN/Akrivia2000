@@ -215,6 +215,90 @@ def render_ticker_report(
     return "\n".join(parts)
 
 
+def big_money(value: float | None) -> str:
+    """Uzbek turnover runs to billions; 6 840 000 UZS is unreadable in a report."""
+    if value is None:
+        return "—"
+    for limit, suffix in ((1_000_000_000, "bn"), (1_000_000, "mn"), (1_000, "k")):
+        if abs(value) >= limit:
+            return f"{value / limit:,.1f} {suffix} UZS"
+    return f"{value:,.0f} UZS"
+
+
+LIQUIDITY_LABEL = {
+    "good": "",
+    "moderate": " · moderate volume",
+    "thin": " · thin",
+    "unknown": "",
+}
+
+
+def _scout_row(row, show_turnover: bool = True) -> str:
+    name = _short_name(row.name, row.ticker)
+    head = f"{trend_emoji(row.change_pct)} <b>{escape(row.ticker)}</b>"
+    if name:
+        head += f" — {escape(name)}"
+
+    facts = [percent(row.change_pct)]
+    if show_turnover and row.turnover:
+        facts.append(f"{big_money(row.turnover)} traded")
+    facts.append(f"{row.sessions_traded} session{'s' if row.sessions_traded != 1 else ''}")
+    line = f"<code>{'  '.join(facts)}{LIQUIDITY_LABEL[row.liquidity]}</code>"
+
+    if row.tags:
+        line += f"\n   <i>{escape(', '.join(row.tags))}</i>"
+    return f"{head}\n{line}"
+
+
+def render_scout(report, news: dict | None = None) -> str:
+    """The scouting brief: what moved, on what money, and what to ignore."""
+    title = "Weekly scout" if report.period == "weekly" else "Daily scout"
+    span = (
+        f"{_pretty_date(report.start)} – {_pretty_date(report.end)}"
+        if report.period == "weekly"
+        else _pretty_date(report.end)
+    )
+    lines = [f"🔭 <b>{title}</b> · 🇺🇿 UZSE · {span}"]
+
+    if report.is_empty:
+        lines.append("\nNothing traded on the Uzbek exchange in this window.")
+        return "\n".join(lines)
+
+    if report.turnover_leaders:
+        lines.append("\n💰 <b>Where the money went</b>")
+        lines.extend(_scout_row(r) for r in report.turnover_leaders)
+
+    if report.movers:
+        lines.append("\n📊 <b>Biggest real moves</b>")
+        lines.extend(_scout_row(r) for r in report.movers)
+
+    if report.awakened:
+        lines.append("\n⚡ <b>Woke up</b>")
+        lines.extend(_scout_row(r, show_turnover=False) for r in report.awakened)
+
+    if news:
+        lines.append("\n📰 <b>In the news</b>")
+        for ticker, titles in list(news.items())[:4]:
+            for title_text in titles[:1]:
+                lines.append(f"• <b>{escape(ticker)}</b> — {escape(title_text)}")
+
+    if report.noise:
+        ignored = ", ".join(
+            f"{escape(r.ticker)} {percent(r.change_pct)}" for r in report.noise
+        )
+        lines.append(
+            f"\n⚠️ <b>Ignore these</b>\n<i>{ignored} — moves on almost no money "
+            "changing hands, not market opinion.</i>"
+        )
+
+    if report.comment:
+        lines.append(f"\n🤖 <b>What this means</b>\n{escape(report.comment)}")
+
+    if report.coverage_note:
+        lines.append(f"\n<i>{escape(report.coverage_note)} Not investment advice.</i>")
+    return "\n".join(lines)
+
+
 def render_status(
     *,
     followed: int,

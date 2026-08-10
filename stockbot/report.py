@@ -6,12 +6,14 @@ import asyncio
 import logging
 from dataclasses import dataclass
 
-from .formatting import money, render_report, render_ticker_report
+from .formatting import money, render_report, render_scout, render_ticker_report
 from .markets import market_by_code
 from .services.ai import AIClient
 from .services.prices import PriceProvider, Quote
 from .services.uzse import MARKET as UZSE_MARKET
+from .services.news import NewsProvider, match_headlines
 from .services.uzse import BudgetExhausted, UzseDetail, UzseProvider
+from .scout import ScoutReport
 from .storage import Storage
 
 logger = logging.getLogger(__name__)
@@ -36,12 +38,16 @@ class ReportBuilder:
         ai: AIClient,
         benchmark_ticker: str,
         uzse: UzseProvider | None = None,
+        scout=None,
+        news: NewsProvider | None = None,
     ) -> None:
         self._storage = storage
         self._prices = prices
         self._ai = ai
         self._benchmark_ticker = benchmark_ticker
         self._uzse = uzse
+        self._scout = scout
+        self._news = news
 
     async def build_portfolio_report(
         self, chat_id: int, *, scheduled: bool = False
@@ -178,6 +184,43 @@ class ReportBuilder:
             quote, comment, [], history_depth=depth, detail=_detail_rows(detail)
         )
 
+    async def build_scout_report(
+        self, period: str, *, scheduled: bool = False
+    ) -> tuple[str, bool]:
+        """The scouting brief. Returns the message and whether it is worth sending."""
+        if self._scout is None or self._uzse is None or not self._uzse.enabled:
+            return "UZSE data is not configured, so there is nothing to scout.", False
+
+        try:
+            report = await self._scout.build(period, scheduled=scheduled)
+        except BudgetExhausted as exc:
+            logger.warning("scout skipped: %s", exc)
+            return "The parse.bot budget for this month is used up.", False
+
+        news = await self._scout_news(report)
+
+        # Only a short ranked table reaches the model — the free Groq tier is
+        # capped by tokens per day, and 120 rows of a thin market would burn it
+        # for no gain.
+        report.comment = await self._ai.scout_comment(
+            period=period,
+            facts=_scout_facts(report),
+            headlines=_headlines_block(news),
+        )
+        return render_scout(report, news), not report.is_empty
+
+    async def _scout_news(self, report) -> dict[str, list[str]]:
+        if self._news is None or not self._news.enabled:
+            return {}
+        interesting = {
+            row.ticker: row.name
+            for row in report.turnover_leaders + report.movers + report.awakened
+        }
+        if not interesting:
+            return {}
+        headlines = await self._news.fetch()
+        return match_headlines(headlines, interesting)
+
     async def _headlines_for_movers(self, quotes: list[Quote]) -> dict[str, list[str]]:
         if not self._ai.enabled:
             return {}
@@ -272,6 +315,36 @@ def _detail_rows(detail: UzseDetail | None) -> list[tuple[str, str]]:
             )
         )
     return rows
+
+
+def _scout_facts(report: ScoutReport) -> str:
+    """A compact ranked table for the model — never the whole exchange."""
+    lines = [f"Period: {report.period}, {report.start} to {report.end}"]
+
+    def block(title: str, rows) -> None:
+        if not rows:
+            return
+        lines.append(title)
+        for row in rows:
+            parts = [f"{row.ticker} ({row.name or row.ticker})"]
+            if row.change_pct is not None:
+                parts.append(f"{row.change_pct:+.1f}%")
+            if row.turnover:
+                parts.append(f"{row.turnover:,.0f} UZS traded")
+            parts.append(f"{row.sessions_traded} sessions, liquidity {row.liquidity}")
+            if row.market_cap:
+                parts.append(f"company value {row.market_cap:,.0f} UZS")
+            if row.tags:
+                parts.append("; ".join(row.tags))
+            lines.append("  " + ", ".join(parts))
+
+    block("Most money traded:", report.turnover_leaders)
+    block("Biggest moves that were not noise:", report.movers)
+    block("Started trading again after being quiet:", report.awakened)
+    block("Moves on almost no money, treat as noise:", report.noise)
+    if report.coverage_note:
+        lines.append(report.coverage_note)
+    return "\n".join(lines)
 
 
 def _headlines_block(headlines: dict[str, list[str]]) -> str:

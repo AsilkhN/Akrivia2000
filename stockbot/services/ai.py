@@ -68,6 +68,24 @@ class AIClient:
         )
         return await self._complete(prompt, max_tokens=400)
 
+    async def scout_comment(self, period: str, facts: str, headlines: str) -> str | None:
+        """The scouting verdict. Kept short, and told what not to be fooled by."""
+        horizon = "week" if period == "weekly" else "day"
+        prompt = (
+            f"Uzbek Stock Exchange, past {horizon}. This is a small, thinly "
+            "traded market: most large percentage moves happen on almost no "
+            "money and mean nothing.\n\n"
+            f"{facts}\n\n"
+            f"Headlines from Uzbek business media:\n{headlines or '(none found)'}\n\n"
+            "Write at most 4 short sentences, 80 words total:\n"
+            "- what actually happened, judged by money traded rather than percentages\n"
+            "- name at most two companies genuinely worth watching, and why\n"
+            "- if nothing here is meaningful, say exactly that instead of "
+            "manufacturing interest\n"
+            "One sentence per line. No bullets, no headers."
+        )
+        return await self._complete(prompt, max_tokens=280)
+
     async def _complete(self, prompt: str, max_tokens: int) -> str | None:
         if not self.enabled:
             return None

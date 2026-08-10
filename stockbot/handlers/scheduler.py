@@ -36,6 +36,7 @@ async def daily_tick(context: ContextTypes.DEFAULT_TYPE) -> None:
         try:
             if _is_due(user):
                 await _send_daily_report(context, user)
+            await _maybe_send_scout(context, user)
         except Exception:  # noqa: BLE001 - one user must never break the loop
             logger.exception("daily report failed for chat %s", user.chat_id)
 
@@ -57,6 +58,47 @@ def _is_due(user: User, now: datetime | None = None) -> bool:
 
     hour, minute = (int(part) for part in user.digest_time.split(":"))
     return (local_now.hour, local_now.minute) >= (hour, minute)
+
+
+async def _maybe_send_scout(context: ContextTypes.DEFAULT_TYPE, user: User) -> None:
+    """The scout runs after the market has closed, and again on Monday for the
+    week just finished."""
+    config: Config = context.bot_data["config"]
+    storage: Storage = context.bot_data["storage"]
+    reports: ReportBuilder = context.bot_data["reports"]
+    if not config.scout_enabled or not config.uzse_enabled:
+        return
+
+    zone = ZoneInfo(user.timezone)
+    local_now = datetime.now(zone)
+    local_date = local_now.date().isoformat()
+    hour, minute = (int(p) for p in config.scout_time.split(":"))
+    if (local_now.hour, local_now.minute) < (hour, minute):
+        return
+
+    period = "weekly" if local_now.weekday() == 0 else "daily"
+    marker = f"scout:{period}:{user.chat_id}"
+    if storage.load_cache(marker) and storage.load_cache(marker)[2] == local_date:
+        return
+
+    text, worth_sending = await reports.build_scout_report(period, scheduled=True)
+    storage.save_cache(marker, "sent", local_date)
+    if not worth_sending:
+        logger.info("scout for chat %s had nothing to report", user.chat_id)
+        return
+
+    try:
+        for chunk in split_message(text):
+            await context.bot.send_message(
+                chat_id=user.chat_id,
+                text=chunk,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+            )
+    except Forbidden:
+        storage.set_enabled(user.chat_id, False)
+    except TelegramError:
+        logger.exception("could not deliver scout to chat %s", user.chat_id)
 
 
 async def _send_daily_report(context: ContextTypes.DEFAULT_TYPE, user: User) -> None:

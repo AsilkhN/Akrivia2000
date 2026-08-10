@@ -12,7 +12,9 @@ from stockbot.handlers import commands, scheduler
 from stockbot.report import ReportBuilder
 from stockbot.services.ai import AIClient
 from stockbot.services.prices import PriceProvider
+from stockbot.services.news import NewsProvider
 from stockbot.services.uzse import UzseProvider
+from stockbot.scout import Scout
 from stockbot.storage import Storage
 
 logger = logging.getLogger(__name__)
@@ -23,6 +25,7 @@ BOT_COMMANDS = [
     BotCommand("add", "Follow a company: /add NVDA"),
     BotCommand("remove", "Stop following: /remove NVDA"),
     BotCommand("ai", "Plain-English briefing: /ai NVDA"),
+    BotCommand("scout", "What is happening on the Uzbek exchange"),
     BotCommand("settime", "Report time: /settime 09:00"),
     BotCommand("settz", "Your timezone: /settz Europe/Berlin"),
     BotCommand("status", "Your current settings"),
@@ -50,6 +53,8 @@ def build_application() -> Application:
         quotes_url=config.parsebot_quotes_url,
         securities_url=config.parsebot_securities_url,
         detail_url=config.parsebot_detail_url,
+        trades_url=config.parsebot_trades_url,
+        listings_url=config.parsebot_listings_url,
         api_key=config.parsebot_api_key,
         monthly_limit=config.parsebot_monthly_limit,
         reserve=config.parsebot_reserve,
@@ -57,7 +62,11 @@ def build_application() -> Application:
         auth_scheme=config.parsebot_auth_scheme,
         method=config.parsebot_method,
     )
-    reports = ReportBuilder(storage, prices, ai, config.benchmark_ticker, uzse)
+    news = NewsProvider(config.news_feeds)
+    scout = Scout(storage, uzse)
+    reports = ReportBuilder(
+        storage, prices, ai, config.benchmark_ticker, uzse, scout=scout, news=news
+    )
 
     if not config.ai_enabled:
         logger.warning("GROQ_API_KEY is not set — reports will have no AI commentary.")
@@ -89,6 +98,7 @@ def build_application() -> Application:
         "list": commands.list_tickers,
         "now": commands.now,
         "ai": commands.ai_briefing,
+        "scout": commands.scout,
         "settime": commands.settime,
         "settz": commands.settz,
         "pause": commands.pause,

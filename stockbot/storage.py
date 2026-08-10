@@ -288,6 +288,35 @@ class Storage:
         )
         self._conn.commit()
 
+    def history_since(self, since: str) -> dict[str, list[tuple[str, float]]]:
+        """Every ticker's closes from `since` onward, oldest first.
+
+        One query for the whole exchange — the scout scans all 122 securities,
+        so per-ticker lookups would mean 122 round trips per report.
+        """
+        rows = self._conn.execute(
+            "SELECT ticker, session_date, price FROM uzse_history "
+            "WHERE session_date >= ? ORDER BY ticker, session_date",
+            (since,),
+        ).fetchall()
+        series: dict[str, list[tuple[str, float]]] = {}
+        for row in rows:
+            series.setdefault(row["ticker"], []).append(
+                (row["session_date"], float(row["price"]))
+            )
+        return series
+
+    def history_span(self, ticker: str) -> tuple[str, str] | None:
+        """Oldest and newest session recorded for a ticker."""
+        row = self._conn.execute(
+            "SELECT MIN(session_date) AS lo, MAX(session_date) AS hi "
+            "FROM uzse_history WHERE ticker = ?",
+            (ticker.upper(),),
+        ).fetchone()
+        if row is None or row["lo"] is None:
+            return None
+        return row["lo"], row["hi"]
+
     def get_history(self, ticker: str, limit: int = 10) -> list[tuple[str, float]]:
         """Most recent sessions first: [(session_date, price), …]."""
         rows = self._conn.execute(

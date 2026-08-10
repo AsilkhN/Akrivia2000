@@ -10,6 +10,20 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Uzbek business media with public RSS. Free, no key, best-effort: a feed that
+# is down, moved or reshaped simply yields no headlines and the report still
+# goes out. kursiv.media runs WordPress, so its investments section exposes a
+# feed at the category URL plus /feed/.
+DEFAULT_NEWS_FEEDS = ",".join(
+    [
+        "https://uz.kursiv.media/category/investments/feed/",
+        "https://uz.kursiv.media/feed/",
+        "https://www.gazeta.uz/uz/rss/",
+        "https://www.spot.uz/uz/rss/",
+        "https://www.uzdaily.uz/ru/rss",
+    ]
+)
+
 
 class ConfigError(RuntimeError):
     """Raised when the environment is missing something the bot cannot run without."""
@@ -35,6 +49,8 @@ class Config:
     parsebot_quotes_url: str = ""
     parsebot_securities_url: str = ""
     parsebot_detail_url: str = ""
+    parsebot_trades_url: str = ""
+    parsebot_listings_url: str = ""
     parsebot_api_key: str = ""
     parsebot_auth_header: str = "Authorization"
     parsebot_auth_scheme: str = "Bearer"
@@ -42,6 +58,9 @@ class Config:
     parsebot_monthly_limit: int = 200
     parsebot_reserve: int = 40
     parsebot_used_this_month: int = 0
+    scout_enabled: bool = True
+    scout_time: str = "18:30"
+    news_feeds: list[str] = field(default_factory=list)
 
     @property
     def ai_enabled(self) -> bool:
@@ -69,6 +88,10 @@ def load_config() -> Config:
     if not is_valid_hhmm(digest_time):
         raise ConfigError(f"DEFAULT_DIGEST_TIME '{digest_time}' must look like 09:00.")
 
+    scout_time = os.getenv("SCOUT_TIME", "18:30").strip() or "18:30"
+    if not is_valid_hhmm(scout_time):
+        raise ConfigError(f"SCOUT_TIME '{scout_time}' must look like 18:30.")
+
     return Config(
         telegram_token=token,
         groq_api_key=os.getenv("GROQ_API_KEY", "").strip(),
@@ -84,6 +107,8 @@ def load_config() -> Config:
         parsebot_quotes_url=os.getenv("PARSEBOT_QUOTES_URL", "").strip(),
         parsebot_securities_url=os.getenv("PARSEBOT_SECURITIES_URL", "").strip(),
         parsebot_detail_url=os.getenv("PARSEBOT_DETAIL_URL", "").strip(),
+        parsebot_trades_url=os.getenv("PARSEBOT_TRADES_URL", "").strip(),
+        parsebot_listings_url=os.getenv("PARSEBOT_LISTINGS_URL", "").strip(),
         parsebot_api_key=os.getenv("PARSEBOT_API_KEY", "").strip(),
         parsebot_auth_header=os.getenv("PARSEBOT_AUTH_HEADER", "Authorization").strip(),
         parsebot_auth_scheme=os.getenv("PARSEBOT_AUTH_SCHEME", "Bearer").strip(),
@@ -91,6 +116,9 @@ def load_config() -> Config:
         parsebot_monthly_limit=int(os.getenv("PARSEBOT_MONTHLY_LIMIT", "200")),
         parsebot_reserve=int(os.getenv("PARSEBOT_RESERVE", "40")),
         parsebot_used_this_month=int(os.getenv("PARSEBOT_USED_THIS_MONTH", "0")),
+        scout_enabled=os.getenv("SCOUT_ENABLED", "true").strip().lower() != "false",
+        scout_time=scout_time,
+        news_feeds=[f.strip() for f in os.getenv("NEWS_FEEDS", DEFAULT_NEWS_FEEDS).split(",") if f.strip()],
     )
 
 
