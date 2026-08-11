@@ -333,3 +333,67 @@ def test_add_says_which_tickers_did_not_fit():
         [Quote(ticker="ONTO", name="Onto", market="US")], [], [], [("NOW", "US")], Cfg
     )
     assert "list is full at 2" in text and "NOW" in text
+
+
+# -- per-company news, keyless ----------------------------------------------
+
+GOOGLE_NEWS = """<?xml version="1.0"?>
+<rss version="2.0"><channel>
+  <item><title>D-Wave Quantum stock plunges after share offering - Reuters</title>
+        <link>https://news.google.com/a</link>
+        <pubDate>Mon, 10 Aug 2026 18:04:00 GMT</pubDate></item>
+  <item><title>Quantum computing outlook for 2025 - Barron's</title>
+        <link>https://news.google.com/b</link>
+        <pubDate>Mon, 03 Mar 2025 10:00:00 GMT</pubDate></item>
+  <item><title>Headline with no date</title>
+        <link>https://news.google.com/c</link></item>
+</channel></rss>"""
+
+
+def test_publisher_suffix_is_stripped_from_google_news_titles():
+    from stockbot.services.news import _strip_source_suffix
+
+    assert (
+        _strip_source_suffix("D-Wave stock plunges after share offering - Reuters")
+        == "D-Wave stock plunges after share offering"
+    )
+    # A hyphenated company name must survive.
+    assert _strip_source_suffix("D-Wave rises") == "D-Wave rises"
+
+
+def test_stale_headlines_are_rejected_and_fresh_ones_kept():
+    """A story from last year cannot explain today's 22% drop.
+
+    Dates are built relative to now rather than hard-coded, so the test does
+    not start failing once the fixture's dates age.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from stockbot.services.news import Headline, _is_recent
+
+    now = datetime.now(timezone.utc)
+    assert _is_recent(Headline("Fresh", "x", published=now - timedelta(days=1))) is True
+    assert _is_recent(Headline("Stale", "x", published=now - timedelta(days=30))) is False
+
+
+def test_undated_headlines_are_kept():
+    """Feeds vary; a missing date is not evidence the story is old."""
+    from stockbot.services.news import _is_recent, parse_feed
+
+    undated = [h for h in parse_feed(GOOGLE_NEWS, "x") if h.published is None]
+    assert undated and _is_recent(undated[0]) is True
+
+
+def test_pubdate_is_parsed_from_rfc822():
+    from stockbot.services.news import parse_feed
+
+    first = parse_feed(GOOGLE_NEWS, "news.google.com")[0]
+    assert first.published is not None
+    assert first.published.year == 2026 and first.published.month == 8
+
+
+def test_per_company_news_needs_no_configured_feeds():
+    """Uzbek feeds are configuration; per-company lookups are built in."""
+    from stockbot.services.news import NewsProvider
+
+    assert NewsProvider([]).enabled is True

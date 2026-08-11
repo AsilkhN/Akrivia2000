@@ -136,7 +136,7 @@ class ReportBuilder:
         if not quote.ok:
             return render_ticker_report(quote, None, [])
 
-        headlines = await self._prices.get_headlines(quote.ticker, limit=3)
+        headlines = await self._headlines_for(quote, limit=3)
         comment = await self._ai.ticker_comment(
             ticker=quote.ticker,
             facts=_facts_block([quote], None),
@@ -226,9 +226,21 @@ class ReportBuilder:
             return {}
         movers = [q for q in quotes if q.ok][:NEWS_FOR_TOP_MOVERS]
         results = await asyncio.gather(
-            *(self._prices.get_headlines(q.ticker, limit=2) for q in movers)
+            *(self._headlines_for(q, limit=2) for q in movers)
         )
         return {q.ticker: titles for q, titles in zip(movers, results) if titles}
+
+    async def _headlines_for(self, quote: Quote, limit: int = 3) -> list[str]:
+        """Headlines for one company, from whichever source has them.
+
+        The price provider is asked first because when it carries news the data
+        is already paid for. Twelve Data has none on the free plan, so without
+        the RSS fallback a report would explain a 20% drop with silence.
+        """
+        titles = await self._prices.get_headlines(quote.ticker, limit=limit)
+        if titles or self._news is None or not self._news.enabled:
+            return titles
+        return await self._news.fetch_for_ticker(quote.ticker, quote.name, limit=limit)
 
 
 def _sort_key(quote: Quote) -> tuple[int, float]:

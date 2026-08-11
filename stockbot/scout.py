@@ -267,4 +267,12 @@ def _coverage_note(trades: list, turnover: dict[str, float]) -> str | None:
     """The trade endpoint caps its response, so never imply full coverage."""
     if not trades:
         return "No trade tape available, so moves are ranked by price action alone."
-    return f"Turnover from {len(trades)} trades covering {len(turnover)} companies."
+    companies = len(turnover)
+    noun = "company" if companies == 1 else "companies"
+    note = f"Turnover from {len(trades)} trades covering {companies} {noun}."
+    if companies <= 1 and len(trades) >= 50:
+        # The endpoint caps its response, so a busy ticker can fill the whole
+        # window and hide everyone else. Say so rather than implying the market
+        # was one company.
+        note += " The trade feed returned only its most recent page, so quieter companies may be missing."
+    return note
