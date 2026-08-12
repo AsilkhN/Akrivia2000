@@ -18,8 +18,7 @@ DEFAULT_NEWS_FEEDS = ",".join(
     [
         "https://uz.kursiv.media/category/investments/feed/",
         "https://uz.kursiv.media/feed/",
-        "https://www.gazeta.uz/uz/rss/",
-        "https://www.spot.uz/uz/rss/",
+        "https://www.gazeta.uz/ru/rss/",
         "https://www.uzdaily.uz/ru/rss",
     ]
 )

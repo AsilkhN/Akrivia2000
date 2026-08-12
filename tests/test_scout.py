@@ -212,8 +212,11 @@ def test_broken_xml_yields_nothing_instead_of_raising():
 
 def test_legal_form_words_are_not_used_as_search_keywords():
     """Otherwise 'aksiyadorlik jamiyati' would match half the news in the country."""
-    assert keywords_for("KVTS", "Kvarts AJ") == ["kvarts"]
-    assert "jamiyati" not in keywords_for("X", "Kvarts aksiyadorlik jamiyati")
+    from stockbot.services.news import fold
+
+    # Keywords come back folded, so they compare against Cyrillic headlines too.
+    assert keywords_for("KVTS", "Kvarts AJ") == [fold("Kvarts")]
+    assert fold("jamiyati") not in keywords_for("X", "Kvarts aksiyadorlik jamiyati")
 
 
 def test_headlines_are_matched_to_the_right_companies():
@@ -397,3 +400,49 @@ def test_per_company_news_needs_no_configured_feeds():
     from stockbot.services.news import NewsProvider
 
     assert NewsProvider([]).enabled is True
+
+
+# -- matching Russian news to Uzbek company names ---------------------------
+# The exchange lists companies in Uzbek Latin; the press writes in Russian
+# Cyrillic. Without folding the two onto common ground, nothing ever matches.
+
+
+def test_russian_headlines_match_uzbek_company_names():
+    from stockbot.services.news import fold, keywords_for
+
+    pairs = [
+        ("Кварц", "Kvarts AJ"),
+        ("Узбектелеком", "O'zbektelekom AK"),
+        ("УзАвто Моторс", "UzAuto Motors AJ"),
+        ("Олмалик", "Olmaliq KMK AJ"),
+        ("Ипотека-банк", "Ipoteka-bank ATIB"),
+        ("Кизилкумцемент", "Qizilqumsement AJ"),
+        ("Хамкорбанк", "Hamkorbank ATB"),
+    ]
+    for russian, uzbek in pairs:
+        keywords = keywords_for("X", uzbek)
+        assert any(k in fold(russian) for k in keywords), f"{russian} vs {uzbek}"
+
+
+def test_folding_is_not_loose_enough_to_match_unrelated_news():
+    """Over-collapsing would tag every headline onto some company."""
+    from stockbot.services.news import Headline, match_headlines
+
+    unrelated = [
+        Headline("Доллар на 13 августа вырос на 58,63 сума", "kursiv"),
+        Headline("Глава Xbox поиграла в The Elder Scrolls VI", "kursiv"),
+        Headline("Сколько узбекистанцы отдохнут на День независимости", "kursiv"),
+    ]
+    matches = match_headlines(
+        unrelated,
+        {"KVTS": "Kvarts AJ", "UZMT": "UzAuto Motors AJ", "HMKB": "Hamkorbank ATB"},
+    )
+    assert matches == {}
+
+
+def test_latin_headlines_still_match():
+    """Uzbek-language outlets exist too; folding must not break them."""
+    from stockbot.services.news import Headline, match_headlines
+
+    news = [Headline("Kvarts oyna zavodi ishlab chiqarishni kengaytirdi", "spot")]
+    assert "KVTS" in match_headlines(news, {"KVTS": "Kvarts AJ"})
