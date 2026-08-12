@@ -28,6 +28,41 @@ API_ROOT = "https://generativelanguage.googleapis.com/v1beta/models"
 TIMEOUT_SECONDS = 60
 MAX_SOURCES = 3
 
+# Gemini 2.5 models reason before answering, and those thinking tokens are
+# charged against maxOutputTokens. Left alone the model spends the budget
+# thinking and the reply arrives truncated mid-sentence. This commentary is a
+# few plain sentences drawn from data already supplied, so thinking buys
+# nothing here.
+THINKING_DISABLED = {"thinkingBudget": 0}
+# Headroom over the caller's limit, since grounded answers run longer.
+OUTPUT_TOKEN_HEADROOM = 3
+
+# Infrastructure and CMS domains that grounding sometimes reports in place of
+# the publisher. Citing umbraco.io implies a credibility it does not have.
+_NOT_PUBLISHERS = {
+    "umbraco.io", "cloudfront.net", "googleusercontent.com", "amazonaws.com",
+    "akamaized.net", "wordpress.com", "blogspot.com", "vercel.app",
+}
+
+
+def build_payload(prompt: str, max_tokens: int, model: str, use_search: bool) -> dict:
+    """The request body, separated out so its rules are testable."""
+    generation: dict = {
+        "temperature": 0.3,
+        "maxOutputTokens": max_tokens * OUTPUT_TOKEN_HEADROOM,
+    }
+    if "2.5" in model:
+        generation["thinkingConfig"] = THINKING_DISABLED
+
+    payload: dict = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+        "generationConfig": generation,
+    }
+    if use_search:
+        payload["tools"] = [{"google_search": {}}]
+    return payload
+
 
 class GeminiClient(AIClient):
     def __init__(self, api_key: str, model: str, use_search: bool = True) -> None:
@@ -38,13 +73,7 @@ class GeminiClient(AIClient):
         if not self.enabled:
             return None
 
-        payload: dict = {
-            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-            "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-            "generationConfig": {"temperature": 0.3, "maxOutputTokens": max_tokens},
-        }
-        if self._use_search:
-            payload["tools"] = [{"google_search": {}}]
+        payload = build_payload(prompt, max_tokens, self._model, self._use_search)
 
         url = f"{API_ROOT}/{self._model}:generateContent"
         try:
@@ -80,6 +109,12 @@ def _extract(data: object) -> str | None:
         return None
 
     candidate = candidates[0]
+    if candidate.get("finishReason") == "MAX_TOKENS":
+        # Shows up in the report as a sentence stopping halfway, so say why.
+        logger.warning(
+            "Gemini hit its output limit; commentary may be truncated. Raise "
+            "maxOutputTokens or disable thinking for this model."
+        )
     parts = (candidate.get("content") or {}).get("parts") or []
     text = "".join(
         part.get("text", "") for part in parts if isinstance(part, dict)
@@ -105,11 +140,15 @@ def _sources(candidate: dict) -> list[str]:
         if not isinstance(web, dict):
             continue
         domain = _domain(web.get("title") or web.get("uri") or "")
-        if domain and domain not in domains:
+        if domain and domain not in domains and not _is_infrastructure(domain):
             domains.append(domain)
         if len(domains) >= MAX_SOURCES:
             break
     return domains
+
+
+def _is_infrastructure(domain: str) -> bool:
+    return any(domain == known or domain.endswith("." + known) for known in _NOT_PUBLISHERS)
 
 
 def _domain(value: str) -> str:
