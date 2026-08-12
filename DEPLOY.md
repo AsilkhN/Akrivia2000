@@ -110,7 +110,7 @@ Minimum to start:
 | Variable | Where to get it |
 | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | [@BotFather](https://t.me/BotFather) → `/newbot` |
-| `GROQ_API_KEY` | [console.groq.com/keys](https://console.groq.com/keys) |
+| `GROQ_API_KEY` or `GEMINI_API_KEY` | [console.groq.com/keys](https://console.groq.com/keys) or [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
 | `DEFAULT_TIMEZONE` | `Asia/Tashkent` |
 
 For the Uzbek exchange, add the parse.bot endpoints (see `.env.example` for

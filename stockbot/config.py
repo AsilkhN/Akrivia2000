@@ -57,6 +57,10 @@ class Config:
     parsebot_monthly_limit: int = 200
     parsebot_reserve: int = 40
     parsebot_used_this_month: int = 0
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.5-flash"
+    gemini_search: bool = True
+    ai_provider: str = "auto"
     twelvedata_api_key: str = ""
     price_provider: str = "auto"
     scout_enabled: bool = True
@@ -64,8 +68,17 @@ class Config:
     news_feeds: list[str] = field(default_factory=list)
 
     @property
+    def use_gemini(self) -> bool:
+        """Gemini can search the web, which Groq cannot; prefer it when keyed."""
+        if self.ai_provider == "groq":
+            return False
+        if self.ai_provider == "gemini":
+            return True
+        return bool(self.gemini_api_key)  # 'auto'
+
+    @property
     def ai_enabled(self) -> bool:
-        return bool(self.groq_api_key)
+        return bool(self.gemini_api_key if self.use_gemini else self.groq_api_key)
 
     @property
     def use_twelvedata(self) -> bool:
@@ -126,6 +139,10 @@ def load_config() -> Config:
         parsebot_monthly_limit=int(os.getenv("PARSEBOT_MONTHLY_LIMIT", "200")),
         parsebot_reserve=int(os.getenv("PARSEBOT_RESERVE", "40")),
         parsebot_used_this_month=int(os.getenv("PARSEBOT_USED_THIS_MONTH", "0")),
+        gemini_api_key=os.getenv("GEMINI_API_KEY", "").strip(),
+        gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip(),
+        gemini_search=os.getenv("GEMINI_SEARCH", "true").strip().lower() != "false",
+        ai_provider=os.getenv("AI_PROVIDER", "auto").strip().lower(),
         twelvedata_api_key=os.getenv("TWELVEDATA_API_KEY", "").strip(),
         price_provider=os.getenv("PRICE_PROVIDER", "auto").strip().lower(),
         scout_enabled=os.getenv("SCOUT_ENABLED", "true").strip().lower() != "false",

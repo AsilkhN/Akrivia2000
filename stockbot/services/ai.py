@@ -32,6 +32,12 @@ SYSTEM_PROMPT = (
 
 
 class AIClient:
+    """Groq, and the base for any other provider.
+
+    Prompt construction lives here so every provider says the same kind of
+    thing in the same voice; a subclass overrides `_complete` and nothing else.
+    """
+
     def __init__(self, api_key: str, model: str) -> None:
         self._api_key = api_key
         self._model = model

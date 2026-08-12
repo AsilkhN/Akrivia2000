@@ -11,6 +11,7 @@ from stockbot.config import ConfigError, load_config
 from stockbot.handlers import commands, scheduler
 from stockbot.report import ReportBuilder
 from stockbot.services.ai import AIClient
+from stockbot.services.gemini import GeminiClient
 from stockbot.services.prices import PriceProvider
 from stockbot.services.twelvedata import TwelveDataProvider
 from stockbot.services.news import NewsProvider
@@ -60,7 +61,19 @@ def build_application() -> Application:
             "prices: Yahoo Finance. If quotes fail with HTTP 429, this host's IP "
             "is rate-limited — set TWELVEDATA_API_KEY to switch providers."
         )
-    ai = AIClient(config.groq_api_key, config.groq_model)
+    if config.use_gemini:
+        if not config.gemini_api_key:
+            raise ConfigError("AI_PROVIDER=gemini but GEMINI_API_KEY is not set.")
+        ai = GeminiClient(config.gemini_api_key, config.gemini_model, config.gemini_search)
+        logger.info(
+            "commentary: Gemini %s (web search %s)",
+            config.gemini_model,
+            "on" if config.gemini_search else "off",
+        )
+    else:
+        ai = AIClient(config.groq_api_key, config.groq_model)
+        if config.groq_api_key:
+            logger.info("commentary: Groq %s", config.groq_model)
     uzse = UzseProvider(
         storage,
         quotes_url=config.parsebot_quotes_url,
@@ -82,7 +95,10 @@ def build_application() -> Application:
     )
 
     if not config.ai_enabled:
-        logger.warning("GROQ_API_KEY is not set — reports will have no AI commentary.")
+        logger.warning(
+            "No AI key set (GROQ_API_KEY or GEMINI_API_KEY) — reports will have "
+            "no commentary."
+        )
     if config.uzse_enabled:
         if config.parsebot_used_this_month:
             uzse.seed_credits_used(config.parsebot_used_this_month)
