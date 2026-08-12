@@ -38,6 +38,37 @@ DEFAULT_TICKER_FEEDS = (
 # A headline from last month cannot explain today's move, and offering one as
 # though it could is worse than saying nothing.
 MAX_HEADLINE_AGE_DAYS = 4
+
+# Several Uzbek outlets reject the default httpx user agent with 403. They are
+# serving a public feed, so identifying as a normal browser is enough.
+BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/125.0 Safari/537.36"
+    ),
+    "Accept": "application/rss+xml, application/xml, text/xml, */*",
+}
+
+# Uzbek business media publishes largely in Russian, so a company the exchange
+# lists as "Kvarts" appears in the news as «Кварц» and "O'zbektelekom" as
+# «Узбектелеком». Matching Latin keywords against Cyrillic text finds nothing,
+# which is why this transliterates both sides onto common ground.
+_CYRILLIC_TO_LATIN = {
+    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e",
+    "ж": "zh", "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m",
+    "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u",
+    "ф": "f", "х": "h", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "sh", "ъ": "",
+    "ы": "i", "ь": "", "э": "e", "ю": "yu", "я": "ya",
+}
+
+# Spellings that differ between the two scripts but sound the same. Folding
+# them makes "Kvarts" and "Кварц" the same string.
+_EQUIVALENCES = (("ts", "c"), ("ch", "c"), ("sh", "s"), ("zh", "z"),
+                 ("kh", "h"), ("yu", "u"), ("ya", "a"), ("q", "k"),
+                 ("x", "h"), ("j", "y"), ("w", "v"),
+                 # Applied last, so ts/ch have already become c: Russian
+                 # «цемент» and Uzbek "sement" then agree.
+                 ("c", "s"))
 MAX_ITEMS_PER_FEED = 40
 MIN_KEYWORD_LENGTH = 5
 
@@ -89,7 +120,7 @@ class NewsProvider:
             for template in self._ticker_feeds:
                 url = template.format(ticker=quote_plus(ticker), query=query)
                 try:
-                    response = await client.get(url)
+                    response = await client.get(url, headers=BROWSER_HEADERS)
                     response.raise_for_status()
                 except Exception as exc:  # noqa: BLE001 - news is never fatal
                     logger.warning("news feed %s failed: %s", _source_name(url), exc)
@@ -116,7 +147,7 @@ class NewsProvider:
         ) as client:
             for url in self._feeds:
                 try:
-                    response = await client.get(url)
+                    response = await client.get(url, headers=BROWSER_HEADERS)
                     response.raise_for_status()
                     headlines.extend(parse_feed(response.text, _source_name(url)))
                 except Exception as exc:  # noqa: BLE001 - news must never break a report
@@ -196,17 +227,37 @@ def _source_name(url: str) -> str:
     return url.split("//", 1)[-1].split("/", 1)[0].removeprefix("www.")
 
 
+def fold(text: str) -> str:
+    """Reduce Latin or Cyrillic text to a common comparable form.
+
+    "Kvarts", "Кварц" and "Kvarc" all fold to the same string, so a Russian
+    headline can be matched against a company name the exchange publishes in
+    Uzbek Latin.
+    """
+    lowered = _normalise(text)
+    transliterated = "".join(_CYRILLIC_TO_LATIN.get(ch, ch) for ch in lowered)
+    for source, target in _EQUIVALENCES:
+        transliterated = transliterated.replace(source, target)
+    # Uzbek Latin O' and G' correspond to Russian У and Г.
+    transliterated = transliterated.replace("o'", "u").replace("g'", "g")
+    kept = "".join(ch for ch in transliterated if ch.isalnum())
+    return re.sub(r"(.)\1+", r"\1", kept)  # collapse doubled letters
+
+
 def keywords_for(ticker: str, name: str | None) -> list[str]:
     """Distinctive words from a company name, usable as headline search terms."""
     if not name:
         return []
     cleaned = _normalise(name)
     words = [w for w in re.split(r"[^\w']+", cleaned) if w]
-    return [
-        word
-        for word in words
-        if len(word) >= MIN_KEYWORD_LENGTH and word not in STOPWORDS
-    ]
+    keywords = []
+    for word in words:
+        if len(word) < MIN_KEYWORD_LENGTH or word in STOPWORDS:
+            continue
+        folded = fold(word)
+        if len(folded) >= 4 and folded not in keywords:
+            keywords.append(folded)
+    return keywords
 
 
 def match_headlines(
@@ -216,7 +267,7 @@ def match_headlines(
     if not headlines:
         return {}
 
-    normalised = [(_normalise(h.title), h) for h in headlines]
+    normalised = [(fold(h.title), h) for h in headlines]
     matches: dict[str, list[str]] = {}
     for ticker, name in companies.items():
         for keyword in keywords_for(ticker, name):
