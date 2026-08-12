@@ -42,6 +42,9 @@ OUTPUT_TOKEN_HEADROOM = 3
 _NOT_PUBLISHERS = {
     "umbraco.io", "cloudfront.net", "googleusercontent.com", "amazonaws.com",
     "akamaized.net", "wordpress.com", "blogspot.com", "vercel.app",
+    # A video host names the platform, not who is speaking, so it tells the
+    # reader nothing about whether the claim is trustworthy.
+    "youtube.com", "youtu.be",
 }
 
 

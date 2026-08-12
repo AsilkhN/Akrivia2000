@@ -8,6 +8,7 @@ missing or the call fails, reports are still sent, just without commentary.
 from __future__ import annotations
 
 import logging
+from datetime import date
 
 import httpx
 
@@ -26,6 +27,9 @@ SYSTEM_PROMPT = (
     "or 'investors are watching closely'.\n"
     "- Say plainly when a move has no known explanation instead of inventing one.\n"
     "- Do not give buy/sell/hold advice, price targets, or predictions.\n"
+    "- The figures given to you are authoritative and describe a stated period. "
+    "If you mention a move over any other period, name that period explicitly, "
+    "so the reader never sees a percentage that contradicts the one above it.\n"
     "- No greetings, no sign-offs, no markdown headers, no bold. Plain sentences.\n"
     "- Stay strictly within the length limit you are given."
 )
@@ -61,7 +65,10 @@ class AIClient:
     async def ticker_comment(self, ticker: str, facts: str, headlines: str) -> str | None:
         """A short plain-English briefing on a single company."""
         prompt = (
-            f"Company: {ticker}\n\n"
+            f"Company: {ticker}\n"
+            f"Today is {date.today().isoformat()}. In the figures below, "
+            "'day' means the last trading session and 'week' means the last "
+            "five sessions.\n\n"
             f"{facts}\n\n"
             f"Recent headlines:\n{headlines or '(none available)'}\n\n"
             "Write about 100 words in three short paragraphs, separated by blank "

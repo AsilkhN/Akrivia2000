@@ -549,3 +549,32 @@ def test_older_models_are_not_sent_an_unsupported_thinking_setting():
     payload = build_payload("hi", 400, "gemini-1.5-flash", use_search=False)
     assert "thinkingConfig" not in payload["generationConfig"]
     assert "tools" not in payload
+
+
+def test_the_model_is_told_which_period_the_figures_cover():
+    """Grounded answers reach for other windows: production produced "+16% in
+    five days" directly under a line reading "-3.7% week"."""
+    from stockbot.services.ai import SYSTEM_PROMPT
+
+    assert "name that period explicitly" in SYSTEM_PROMPT
+    assert "contradicts" in SYSTEM_PROMPT
+
+
+def test_video_hosts_are_not_cited_as_publishers():
+    from stockbot.services.gemini import _extract
+
+    data = {
+        "candidates": [
+            {
+                "content": {"parts": [{"text": "A reason."}]},
+                "groundingMetadata": {
+                    "groundingChunks": [
+                        {"web": {"title": "youtube.com"}},
+                        {"web": {"title": "simplywall.st"}},
+                    ]
+                },
+            }
+        ]
+    }
+    assert "Sources: simplywall.st" in _extract(data)
+    assert "youtube" not in _extract(data)
