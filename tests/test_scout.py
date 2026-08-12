@@ -446,3 +446,64 @@ def test_latin_headlines_still_match():
 
     news = [Headline("Kvarts oyna zavodi ishlab chiqarishni kengaytirdi", "spot")]
     assert "KVTS" in match_headlines(news, {"KVTS": "Kvarts AJ"})
+
+
+# -- Gemini responses -------------------------------------------------------
+
+
+def test_gemini_text_is_extracted_and_sources_named():
+    """A grounded claim the reader cannot check is worth less than a plain one."""
+    from stockbot.services.gemini import _extract
+
+    data = {
+        "candidates": [
+            {
+                "content": {"parts": [{"text": "D-Wave fell after a share sale."}]},
+                "groundingMetadata": {
+                    "groundingChunks": [
+                        {"web": {"uri": "https://www.reuters.com/x", "title": "reuters.com"}},
+                        {"web": {"uri": "https://www.bloomberg.com/y", "title": "bloomberg.com"}},
+                        {"web": {"uri": "https://www.reuters.com/z", "title": "reuters.com"}},
+                    ]
+                },
+            }
+        ]
+    }
+    text = _extract(data)
+    assert "D-Wave fell after a share sale." in text
+    assert "Sources: reuters.com, bloomberg.com" in text
+    assert text.count("reuters.com") == 1  # duplicates collapsed
+
+
+def test_gemini_answer_without_grounding_has_no_sources_line():
+    from stockbot.services.gemini import _extract
+
+    data = {"candidates": [{"content": {"parts": [{"text": "Quiet day."}]}}]}
+    assert _extract(data) == "Quiet day."
+
+
+def test_gemini_multipart_answers_are_joined():
+    from stockbot.services.gemini import _extract
+
+    data = {"candidates": [{"content": {"parts": [{"text": "One. "}, {"text": "Two."}]}}]}
+    assert _extract(data) == "One. Two."
+
+
+def test_gemini_errors_and_junk_yield_no_commentary():
+    """A failed call must drop the commentary, never the report."""
+    from stockbot.services.gemini import _extract
+
+    assert _extract({"error": {"code": 429, "message": "quota"}}) is None
+    assert _extract({"candidates": []}) is None
+    assert _extract({"candidates": [{"content": {"parts": []}}]}) is None
+    assert _extract("not a dict") is None
+
+
+def test_gemini_reuses_the_shared_prompts():
+    """Both providers must speak in the same voice; only transport differs."""
+    from stockbot.services.ai import AIClient
+    from stockbot.services.gemini import GeminiClient
+
+    assert issubclass(GeminiClient, AIClient)
+    assert GeminiClient.portfolio_comment is AIClient.portfolio_comment
+    assert GeminiClient.scout_comment is AIClient.scout_comment
