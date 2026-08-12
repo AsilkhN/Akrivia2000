@@ -507,3 +507,45 @@ def test_gemini_reuses_the_shared_prompts():
     assert issubclass(GeminiClient, AIClient)
     assert GeminiClient.portfolio_comment is AIClient.portfolio_comment
     assert GeminiClient.scout_comment is AIClient.scout_comment
+
+
+def test_gemini_does_not_credit_cms_and_cdn_domains_as_publishers():
+    """Citing umbraco.io as a source implies a credibility it does not have."""
+    from stockbot.services.gemini import _extract
+
+    data = {
+        "candidates": [
+            {
+                "content": {"parts": [{"text": "A reason."}]},
+                "groundingMetadata": {
+                    "groundingChunks": [
+                        {"web": {"title": "umbraco.io"}},
+                        {"web": {"title": "reuters.com"}},
+                        {"web": {"title": "cdn.cloudfront.net"}},
+                    ]
+                },
+            }
+        ]
+    }
+    text = _extract(data)
+    assert "Sources: reuters.com" in text
+    assert "umbraco" not in text and "cloudfront" not in text
+
+
+def test_thinking_is_disabled_on_25_models_so_answers_are_not_truncated():
+    """Thinking tokens are charged against the output budget, so the model
+    spends it reasoning and the reply stops mid-sentence."""
+    from stockbot.services.gemini import build_payload
+
+    payload = build_payload("hi", 400, "gemini-2.5-flash", use_search=True)
+    assert payload["generationConfig"]["thinkingConfig"] == {"thinkingBudget": 0}
+    assert payload["generationConfig"]["maxOutputTokens"] > 400
+    assert payload["tools"] == [{"google_search": {}}]
+
+
+def test_older_models_are_not_sent_an_unsupported_thinking_setting():
+    from stockbot.services.gemini import build_payload
+
+    payload = build_payload("hi", 400, "gemini-1.5-flash", use_search=False)
+    assert "thinkingConfig" not in payload["generationConfig"]
+    assert "tools" not in payload
