@@ -273,6 +273,14 @@ def _facts_block(quotes: list[Quote], benchmarks) -> str:
             line += f", day {quote.day_change_pct:+.2f}%"
         if quote.week_change_pct is not None:
             line += f", week {quote.week_change_pct:+.2f}%"
+        if quote.suspect:
+            # Without this the model reaches for the nearest bad news and
+            # explains a move that never happened.
+            line += (
+                " — WARNING: this figure looks like a data error, not a real "
+                "move. Say it appears to be bad data and do not explain it as "
+                "though it happened"
+            )
         lines.append(line)
     if isinstance(benchmarks, Quote):
         benchmarks = {benchmarks.market: benchmarks}
