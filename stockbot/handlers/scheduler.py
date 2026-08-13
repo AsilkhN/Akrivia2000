@@ -81,8 +81,12 @@ async def _maybe_send_scout(context: ContextTypes.DEFAULT_TYPE, user: User) -> N
     if storage.load_cache(marker) and storage.load_cache(marker)[2] == local_date:
         return
 
-    text, worth_sending = await reports.build_scout_report(period, scheduled=True)
+    # Claim the day before building, not after. A grounded AI call can take
+    # longer than the scheduler's one-minute tick, and the next tick would
+    # otherwise start a second report before the first had recorded itself —
+    # which is how the scout went out twice in one day.
     storage.save_cache(marker, "sent", local_date)
+    text, worth_sending = await reports.build_scout_report(period, scheduled=True)
     if not worth_sending:
         logger.info("scout for chat %s had nothing to report", user.chat_id)
         return

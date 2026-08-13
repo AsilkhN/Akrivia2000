@@ -578,3 +578,74 @@ def test_video_hosts_are_not_cited_as_publishers():
     }
     assert "Sources: simplywall.st" in _extract(data)
     assert "youtube" not in _extract(data)
+
+
+# -- bad provider data ------------------------------------------------------
+# Twelve Data served QBTS a close of 16.21 for 2026-08-12, sitting between
+# 20.23 and 20.96, when the real close was 20.74. The bot reported it
+# faithfully and the AI invented a cause for a crash that never happened.
+
+
+def test_the_real_bad_bar_is_recognised():
+    from stockbot.services.twelvedata import looks_like_bad_tick
+
+    qbts_2026_08_12 = {
+        "datetime": "2026-08-12", "open": "20.78900", "high": "21",
+        "low": "16.21000", "close": "16.21000", "volume": "13202464",
+    }
+    assert looks_like_bad_tick(qbts_2026_08_12) is True
+
+
+def test_an_ordinary_session_is_not_flagged():
+    from stockbot.services.twelvedata import looks_like_bad_tick
+
+    normal = {"open": "20.595", "high": "21.75", "low": "20.49", "close": "20.96"}
+    assert looks_like_bad_tick(normal) is False
+
+
+def test_a_genuine_crash_that_closes_inside_its_range_is_not_flagged():
+    """Real crashes rarely close exactly on the low; that precision is the tell."""
+    from stockbot.services.twelvedata import looks_like_bad_tick
+
+    crash = {"open": "100", "high": "101", "low": "70", "close": "74"}
+    assert looks_like_bad_tick(crash) is False
+
+
+def test_incomplete_bars_are_not_flagged():
+    from stockbot.services.twelvedata import looks_like_bad_tick
+
+    assert looks_like_bad_tick(None) is False
+    assert looks_like_bad_tick({"open": "10"}) is False
+    assert looks_like_bad_tick({"open": "0", "high": "0", "low": "0", "close": "0"}) is False
+
+
+def test_a_flagged_quote_warns_the_reader():
+    from stockbot.formatting import quote_lines
+    from stockbot.services.prices import Quote
+
+    line = quote_lines(Quote(ticker="QBTS", price=16.21, day_change_pct=-19.9,
+                             suspect=True, note="this close looks like a data error"))
+    assert "⚠️" in line and "data error" in line
+
+
+def test_the_model_is_warned_off_explaining_a_flagged_figure():
+    from stockbot.report import _facts_block
+    from stockbot.services.prices import Quote
+
+    facts = _facts_block(
+        [Quote(ticker="QBTS", price=16.21, day_change_pct=-19.9, suspect=True)], None
+    )
+    assert "looks like a data error" in facts
+    assert "do not explain it" in facts
+
+
+async def test_credits_are_kept_inside_the_per_minute_allowance():
+    """Nine credits in one minute silently dropped the benchmark request."""
+    import time as _time
+
+    from stockbot.services.twelvedata import CreditThrottle
+
+    throttle = CreditThrottle(per_minute=8)
+    started = _time.monotonic()
+    await throttle.take(8)  # a full watchlist
+    assert _time.monotonic() - started < 0.5  # first batch is immediate

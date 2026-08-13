@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import deque
 from datetime import datetime
 
 import httpx
@@ -34,12 +35,47 @@ CACHE_TTL_SECONDS = 120
 SESSIONS = 7
 # The free plan allows eight symbols per batched request.
 BATCH_SIZE = 8
+# ...and eight credits a minute, where every symbol in a batch costs one. A
+# report asks for the watchlist plus a benchmark index, which quietly exceeds
+# that: the benchmark request comes back rate-limited and the "whole market"
+# comparison silently disappears from the report. Requests are therefore
+# metered rather than fired off as fast as they are wanted.
+CREDITS_PER_MINUTE = 8
+
+# A close that lands exactly on the low of an unusually wide session, with no
+# corresponding move the next day, is the signature of one erroneous print
+# being recorded as both the low and the close. Twelve Data served exactly this
+# for QBTS on 2026-08-12: open 20.79, high 21.00, low and close both 16.21,
+# against a real close of 20.74.
+SUSPECT_RANGE = 0.20
+SUSPECT_MOVE = 0.15
+
+
+class CreditThrottle:
+    """Keeps requests inside the provider's per-minute credit allowance."""
+
+    def __init__(self, per_minute: int = CREDITS_PER_MINUTE) -> None:
+        self._per_minute = per_minute
+        self._spent: deque[float] = deque()
+
+    async def take(self, credits: int) -> None:
+        while True:
+            now = time.monotonic()
+            while self._spent and now - self._spent[0] >= 60:
+                self._spent.popleft()
+            if len(self._spent) + credits <= self._per_minute:
+                self._spent.extend([now] * credits)
+                return
+            wait = 60 - (now - self._spent[0]) + 0.05
+            logger.info("Twelve Data credit limit reached, waiting %.1fs", wait)
+            await asyncio.sleep(wait)
 
 
 class TwelveDataProvider:
     def __init__(self, api_key: str) -> None:
         self._api_key = api_key
         self._cache: dict[str, tuple[float, Quote]] = {}
+        self._throttle = CreditThrottle()
 
     @property
     def enabled(self) -> bool:
@@ -62,9 +98,14 @@ class TwelveDataProvider:
                 pending.append(ticker)
 
         batches = [pending[i : i + BATCH_SIZE] for i in range(0, len(pending), BATCH_SIZE)]
-        results = await asyncio.gather(
-            *(self._fetch_batch(batch) for batch in batches), return_exceptions=True
-        )
+        # Sequential, because the throttle has to see one batch's cost before
+        # deciding whether the next one fits inside the minute.
+        results = []
+        for batch in batches:
+            try:
+                results.append(await self._fetch_batch(batch))
+            except Exception as exc:  # noqa: BLE001 - one batch must not sink the rest
+                results.append(exc)
         for batch, result in zip(batches, results):
             if isinstance(result, BaseException):
                 logger.warning("Twelve Data batch failed: %s", result)
@@ -103,6 +144,7 @@ class TwelveDataProvider:
     # -- internals ----------------------------------------------------------
 
     async def _fetch_batch(self, tickers: list[str]) -> dict[str, Quote]:
+        await self._throttle.take(len(tickers))
         params = {
             "symbol": ",".join(tickers),
             "interval": "1day",
@@ -122,6 +164,15 @@ class TwelveDataProvider:
         for ticker in tickers:
             entry = payload.get(ticker) if isinstance(payload, dict) else None
             quotes[ticker] = _to_quote(ticker, entry)
+
+        # A batch that yields nothing usable is worth retrying one symbol at a
+        # time: a whole blank section in the report is far worse than a few
+        # extra requests.
+        if tickers and not any(q.ok for q in quotes.values()) and len(tickers) > 1:
+            logger.warning("Twelve Data batch of %s returned nothing; retrying singly",
+                           len(tickers))
+            for ticker in tickers:
+                quotes[ticker] = (await self._fetch_batch([ticker]))[ticker]
         return quotes
 
 
@@ -141,6 +192,7 @@ def _to_quote(ticker: str, entry: object) -> Quote:
 
     values = entry.get("values") or []
     closes: list[tuple[str, float]] = []
+    rows: dict[str, dict] = {}
     for row in values:
         if not isinstance(row, dict):
             continue
@@ -148,6 +200,7 @@ def _to_quote(ticker: str, entry: object) -> Quote:
         session = str(row.get("datetime") or "")[:10]
         if close is not None and session:
             closes.append((session, close))
+            rows[session] = row
     if not closes:
         return Quote(ticker=ticker, error="no price data", market=market)
 
@@ -157,6 +210,7 @@ def _to_quote(ticker: str, entry: object) -> Quote:
     previous = closes[1][1] if len(closes) >= 2 else None
     week_ago = closes[5][1] if len(closes) >= 6 else None
 
+    suspect = looks_like_bad_tick(rows.get(last_session))
     meta = entry.get("meta") if isinstance(entry.get("meta"), dict) else {}
     return Quote(
         ticker=ticker,
@@ -169,7 +223,35 @@ def _to_quote(ticker: str, entry: object) -> Quote:
         session_date=last_session,
         is_live=last_session == datetime.utcnow().date().isoformat(),
         market=market,
+        suspect=suspect,
+        note=(
+            "this close looks like a data error, not a real move — check before "
+            "believing it"
+            if suspect
+            else None
+        ),
     )
+
+
+def looks_like_bad_tick(row: dict | None) -> bool:
+    """Does this session's bar look like one erroneous print rather than a move?
+
+    The tell is a close sitting exactly on the extreme of an unusually wide
+    session. A genuine crash closes somewhere inside its range far more often
+    than precisely on the low.
+    """
+    if not isinstance(row, dict):
+        return False
+    opened = _to_float(row.get("open"))
+    high = _to_float(row.get("high"))
+    low = _to_float(row.get("low"))
+    close = _to_float(row.get("close"))
+    if not all(v and v > 0 for v in (opened, high, low, close)):
+        return False
+
+    span = (high - low) / high
+    move = abs(close - opened) / opened
+    return span > SUSPECT_RANGE and move > SUSPECT_MOVE and close in (low, high)
 
 
 def _to_float(value: object) -> float | None:

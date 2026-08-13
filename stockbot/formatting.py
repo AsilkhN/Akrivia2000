@@ -87,7 +87,8 @@ def quote_lines(quote: Quote) -> str:
     )
     rendered = f"{header}\n<code>{numbers}</code>"
     if quote.note:
-        rendered += f"\n   <i>⏳ {escape(quote.note)}</i>"
+        icon = "⚠️" if quote.suspect else "⏳"
+        rendered += f"\n   <i>{icon} {escape(quote.note)}</i>"
     return rendered
 
 

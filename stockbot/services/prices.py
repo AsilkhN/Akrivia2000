@@ -52,6 +52,7 @@ class Quote:
     is_live: bool = False  # True when that bar is today and still moving
     market: str = "US"  # market code from stockbot.markets, or 'UZSE' 
     note: str | None = None  # short caveat shown under the numbers
+    suspect: bool = False  # the figures look like a data error, not a real move
     error: str | None = None
 
     @property
