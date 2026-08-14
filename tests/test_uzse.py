@@ -302,3 +302,122 @@ def test_configuration_errors_do_not_tell_you_to_check_the_symbol():
 
     unknown_symbol = Quote(ticker="NOPE", error="not listed on UZSE", market="UZSE")
     assert "UZSE listing" in _add_hint(unknown_symbol, "UZSE")
+
+
+# -- the official close catching up ------------------------------------------
+
+
+def _quote_row(ticker, close, change=None, direction="", date="10.08.2026"):
+    return {
+        "ticker": ticker,
+        "closing_price": close,
+        "last_trade_price": close,
+        "change_value": change,
+        "change_direction": direction,
+        "last_trade_date": date,
+    }
+
+
+def _payload(rows):
+    return json.dumps({"status": "success", "data": {"quotes": rows}})
+
+
+def test_the_feeds_own_change_is_read_with_its_direction():
+    quotes = parse_quotes(
+        _payload(
+            [
+                _quote_row("KVTS", "2,385", "101.0", "up"),
+                _quote_row("UTYK", "370,000", "29000.0", "down"),
+                _quote_row("KASU", "0.01", "", ""),
+            ]
+        )
+    )
+    assert quotes["KVTS"].stated_change == 101.0
+    assert quotes["UTYK"].stated_change == -29000.0
+    assert quotes["KASU"].stated_change is None
+
+
+@pytest.mark.asyncio
+async def test_a_stale_official_close_catching_up_is_not_a_move(storage, monkeypatch):
+    """The real failure: BNGP was published at 7 100 while trades had already
+    happened near 14 976. When the official close caught up, the scout reported
+    it as +110.9% in a single session. The feed's own change_value says the day
+    moved by 12, so the two prices cannot belong to the same series.
+    """
+    provider = make_provider(storage)
+    storage.save_history({"BNGP": 7100.0}, "2026-08-10")
+
+    async def fake_request(url):
+        return _payload(
+            [_quote_row("BNGP", "14,975.97", "12.0", "up", "13.08.2026")]
+        )
+
+    monkeypatch.setattr(provider, "_request", lambda url: fake_request(url))
+    await provider.ensure_quotes(scheduled=True)
+
+    series = storage.history_since("2026-08-01")["BNGP"]
+    assert series == [("2026-08-13", 14975.97)]  # the stale 7 100 is not compared
+
+
+@pytest.mark.asyncio
+async def test_an_ordinary_move_the_feed_confirms_keeps_accumulating(storage, monkeypatch):
+    """KVTS really did go 2 284 → 2 385, and the feed says +101. Nothing to cut."""
+    provider = make_provider(storage)
+    storage.save_history({"KVTS": 2284.0}, "2026-08-07")
+
+    async def fake_request(url):
+        return _payload([_quote_row("KVTS", "2,385", "101.0", "up", "10.08.2026")])
+
+    monkeypatch.setattr(provider, "_request", lambda url: fake_request(url))
+    await provider.ensure_quotes(scheduled=True)
+
+    series = storage.history_since("2026-08-01")["KVTS"]
+    assert series == [("2026-08-07", 2284.0), ("2026-08-10", 2385.0)]
+
+
+@pytest.mark.asyncio
+async def test_the_day_change_comes_from_the_exchange_not_our_stored_close(
+    storage, monkeypatch
+):
+    provider = make_provider(storage)
+    storage.save_history({"BNGP": 7100.0}, "2026-08-10")
+
+    async def fake_request(url):
+        return _payload(
+            [_quote_row("BNGP", "14,975.97", "12.0", "up", "13.08.2026")]
+        )
+
+    monkeypatch.setattr(provider, "_request", lambda url: fake_request(url))
+    await provider.ensure_quotes(scheduled=True)
+
+    quote = provider.get_quote("BNGP")
+    assert quote.day_change == 12.0
+    assert quote.day_change_pct == pytest.approx(12.0 / 14963.97 * 100)
+
+
+def test_a_break_stops_the_series_but_keeps_the_price(storage):
+    storage.save_history({"UZTL": 6900.0}, "2026-08-10")
+    storage.save_history({"UZTL": 13500.0}, "2026-08-13", breaks=["UZTL"])
+    storage.save_history({"UZTL": 13600.0}, "2026-08-14")
+
+    assert storage.get_history("UZTL", limit=10) == [
+        ("2026-08-14", 13600.0),
+        ("2026-08-13", 13500.0),
+    ]
+    assert storage.history_since("2026-08-01")["UZTL"] == [
+        ("2026-08-13", 13500.0),
+        ("2026-08-14", 13600.0),
+    ]
+
+
+def test_a_detail_backfill_heals_a_break_it_covers(storage):
+    """20 consistent sessions from one response are internally comparable, so
+    the gap the break was guarding against is gone."""
+    storage.save_history({"KVTS": 2385.0}, "2026-08-10", breaks=["KVTS"])
+    storage.save_history_series(
+        "KVTS", {"2026-08-07": 2284.0, "2026-08-10": 2385.0}
+    )
+    assert storage.history_since("2026-08-01")["KVTS"] == [
+        ("2026-08-07", 2284.0),
+        ("2026-08-10", 2385.0),
+    ]

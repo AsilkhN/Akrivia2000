@@ -51,6 +51,14 @@ CACHE_QUOTES = "quotes"
 CACHE_SECURITIES = "securities"
 CACHE_LISTINGS = "listings"
 
+# How far the exchange's own implied previous close may sit from the price we
+# stored before the two are considered to describe different things. Rounding in
+# a published `change_value` is worth tolerating; a percent of the price is not.
+CATCH_UP_TOLERANCE = 0.02
+# Fallback when the feed publishes no change at all: a jump this large without
+# corroboration is not treated as a move.
+CATCH_UP_MOVE = 0.25
+
 # This exchange formats numbers US-style: "16,100" is sixteen thousand, not
 # sixteen. Getting this wrong understates a price by a factor of a thousand,
 # so the grouping pattern is matched explicitly rather than guessed at.
@@ -66,6 +74,21 @@ class UzseQuote:
     closing_price: float | None
     last_trade_price: float | None
     last_trade_date: str | None  # ISO
+    change_value: float | None = None
+    change_direction: str | None = None  # 'up' | 'down' | ''
+
+    @property
+    def stated_change(self) -> float | None:
+        """How much the feed says this close moved, signed. This is the
+        exchange's own arithmetic and outranks anything we compute ourselves."""
+        if self.change_value is None:
+            return None
+        direction = (self.change_direction or "").strip().lower()
+        if direction == "down":
+            return -abs(self.change_value)
+        if direction == "up":
+            return abs(self.change_value)
+        return 0.0 if self.change_value == 0 else None
 
 
 @dataclass
@@ -212,7 +235,9 @@ class UzseProvider:
         for quote in quotes.values():
             if quote.closing_price is not None and quote.last_trade_date:
                 self._storage.save_history(
-                    {quote.ticker: quote.closing_price}, quote.last_trade_date
+                    {quote.ticker: quote.closing_price},
+                    quote.last_trade_date,
+                    breaks=[quote.ticker] if self._is_catch_up(quote) else [],
                 )
 
         logger.info(
@@ -222,6 +247,37 @@ class UzseProvider:
             self.credits_used(),
         )
         return True
+
+    def _is_catch_up(self, quote: UzseQuote) -> bool:
+        """Is this close a bookkeeping correction rather than a market move?
+
+        UZSE's `closing_price` is an official reference that can trail the
+        trades it describes by days. When it finally catches up, subtracting the
+        stale figure we stored earlier produces a jump nobody experienced — that
+        is where the scout's fictional +110% moves came from.
+
+        The feed answers this itself: `change_value` is the move the exchange
+        claims for this close, so `close − change` is the exchange's own
+        previous close. If that disagrees with what we have on file, our stored
+        price belongs to a different regime and must not be compared across.
+        """
+        close = quote.closing_price
+        if close is None or close <= 0:
+            return False
+        stored = self._storage.latest_history_point(quote.ticker)
+        if stored is None or not quote.last_trade_date:
+            return False
+        stored_date, stored_price = stored
+        if stored_date >= quote.last_trade_date or stored_price <= 0:
+            return False  # same session re-read, or older data arriving late
+
+        stated = quote.stated_change
+        if stated is None:
+            # No corroboration available. Only an implausible jump is treated as
+            # a break, so ordinary moves on quiet tickers still accumulate.
+            return abs(close - stored_price) / stored_price > CATCH_UP_MOVE
+        implied_previous = close - stated
+        return abs(implied_previous - stored_price) > max(1.0, close * CATCH_UP_TOLERANCE)
 
     async def fetch_detail(self, ticker: str, *, scheduled: bool = False) -> UzseDetail | None:
         """Per-company detail with 20 sessions of history. Costs ≤1 per day."""
@@ -410,16 +466,27 @@ class UzseProvider:
             )
 
         history = self._storage.get_history(ticker, limit=12)
-        previous = history[1][1] if len(history) >= 2 else None
         week_ago = history[5][1] if len(history) >= 6 else None
+
+        # The exchange publishes the day's move itself; prefer it over
+        # subtracting our own stored close, which may be a stale official price
+        # from before a catch-up. Fall back to the series only when the feed
+        # says nothing.
+        day_change = row.stated_change
+        if day_change is None:
+            stored_previous = history[1][1] if len(history) >= 2 else None
+            day_change = (
+                (row.closing_price - stored_previous) if stored_previous else None
+            )
+        previous = (row.closing_price - day_change) if day_change is not None else None
 
         return Quote(
             ticker=ticker,
             name=self.company_name(ticker),
             price=row.closing_price,
-            day_change=(row.closing_price - previous) if previous else None,
+            day_change=day_change,
             day_change_pct=(
-                (row.closing_price - previous) / previous * 100 if previous else None
+                day_change / previous * 100 if day_change is not None and previous else None
             ),
             week_change_pct=(
                 (row.closing_price - week_ago) / week_ago * 100 if week_ago else None
@@ -507,6 +574,8 @@ def parse_quotes(raw: str) -> dict[str, UzseQuote]:
             closing_price=to_float(row.get("closing_price")),
             last_trade_price=to_float(row.get("last_trade_price")),
             last_trade_date=_iso_date(row.get("last_trade_date")),
+            change_value=to_float(row.get("change_value")),
+            change_direction=(str(row.get("change_direction") or "").strip() or None),
         )
         existing = quotes.get(ticker)
         if existing is None or _newer(candidate, existing):

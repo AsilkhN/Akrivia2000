@@ -6,9 +6,13 @@ bot instance with completely separate watchlists.
 
 from __future__ import annotations
 
+import logging
 import sqlite3
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -63,6 +67,12 @@ CREATE TABLE IF NOT EXISTS uzse_history (
     ticker       TEXT NOT NULL,
     session_date TEXT NOT NULL,
     price        REAL NOT NULL,
+    -- 1 when prices recorded *before* this row are not comparable to it. UZSE
+    -- publishes an official closing price that can lag the trades it is meant
+    -- to describe by days; when it finally catches up, the jump is bookkeeping
+    -- rather than a market move. Marking the break keeps the (correct) price
+    -- while stopping anything earlier being subtracted from it.
+    series_break INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (ticker, session_date)
 );
 """
@@ -107,6 +117,24 @@ class Storage:
             self._conn.execute(
                 "ALTER TABLE watchlist ADD COLUMN market TEXT NOT NULL DEFAULT 'US'"
             )
+
+        history_columns = {
+            row["name"]
+            for row in self._conn.execute("PRAGMA table_info(uzse_history)").fetchall()
+        }
+        if "series_break" not in history_columns:
+            self._conn.execute(
+                "ALTER TABLE uzse_history ADD COLUMN series_break INTEGER NOT NULL DEFAULT 0"
+            )
+            # Everything recorded before this column existed was written without
+            # the catch-up check, so a stale official close may sit directly
+            # beside a corrected one. Nothing distinguishes the good rows from
+            # the bad after the fact, so every one of them becomes a break: the
+            # prices are kept and still shown, but no change is ever computed
+            # across them. In practice each ticker restarts from its most recent
+            # stored price and rebuilds forward from the next snapshot.
+            self._conn.execute("UPDATE uzse_history SET series_break = 1")
+            logger.info("uzse_history migrated: existing rows marked as series breaks")
 
     def close(self) -> None:
         self._conn.close()
@@ -270,40 +298,67 @@ class Storage:
             return None
         return row["payload"], row["fetched_at"], row["session_date"]
 
-    def save_history(self, prices: dict[str, float], session_date: str) -> None:
-        """Store one session's closing prices, ignoring re-runs of the same day."""
+    def save_history(
+        self,
+        prices: dict[str, float],
+        session_date: str,
+        breaks: Iterable[str] = (),
+    ) -> None:
+        """Store one session's closing prices, ignoring re-runs of the same day.
+
+        Tickers listed in `breaks` are recorded as points where the published
+        close jumped for reasons the feed itself does not corroborate, so no
+        change may be computed from anything earlier.
+        """
+        broken = {ticker.upper() for ticker in breaks}
         self._conn.executemany(
-            "INSERT INTO uzse_history (ticker, session_date, price) VALUES (?, ?, ?) "
-            "ON CONFLICT(ticker, session_date) DO UPDATE SET price = excluded.price",
-            [(ticker, session_date, price) for ticker, price in prices.items()],
+            "INSERT INTO uzse_history (ticker, session_date, price, series_break) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(ticker, session_date) DO UPDATE SET "
+            "price = excluded.price, series_break = excluded.series_break",
+            [
+                (ticker, session_date, price, int(ticker.upper() in broken))
+                for ticker, price in prices.items()
+            ],
         )
         self._conn.commit()
 
     def save_history_series(self, ticker: str, history: dict[str, float]) -> None:
-        """Store many sessions for one ticker, as returned by the detail endpoint."""
+        """Store many sessions for one ticker, as returned by the detail endpoint.
+
+        This is one internally consistent run of closes, so it clears any break
+        it overwrites — the gap it was guarding against is now filled in.
+        """
         self._conn.executemany(
-            "INSERT INTO uzse_history (ticker, session_date, price) VALUES (?, ?, ?) "
-            "ON CONFLICT(ticker, session_date) DO UPDATE SET price = excluded.price",
+            "INSERT INTO uzse_history (ticker, session_date, price, series_break) "
+            "VALUES (?, ?, ?, 0) "
+            "ON CONFLICT(ticker, session_date) DO UPDATE SET "
+            "price = excluded.price, series_break = 0",
             [(ticker.upper(), session, price) for session, price in history.items()],
         )
         self._conn.commit()
 
     def history_since(self, since: str) -> dict[str, list[tuple[str, float]]]:
-        """Every ticker's closes from `since` onward, oldest first.
+        """Every ticker's comparable closes from `since` onward, oldest first.
 
         One query for the whole exchange — the scout scans all 122 securities,
         so per-ticker lookups would mean 122 round trips per report.
+
+        A series is cut at its most recent break: the rows before one describe
+        prices that cannot be subtracted from the rows after it.
         """
         rows = self._conn.execute(
-            "SELECT ticker, session_date, price FROM uzse_history "
+            "SELECT ticker, session_date, price, series_break FROM uzse_history "
             "WHERE session_date >= ? ORDER BY ticker, session_date",
             (since,),
         ).fetchall()
         series: dict[str, list[tuple[str, float]]] = {}
         for row in rows:
-            series.setdefault(row["ticker"], []).append(
-                (row["session_date"], float(row["price"]))
-            )
+            point = (row["session_date"], float(row["price"]))
+            if row["series_break"]:
+                series[row["ticker"]] = [point]
+            else:
+                series.setdefault(row["ticker"], []).append(point)
         return series
 
     def history_span(self, ticker: str) -> tuple[str, str] | None:
@@ -318,13 +373,32 @@ class Storage:
         return row["lo"], row["hi"]
 
     def get_history(self, ticker: str, limit: int = 10) -> list[tuple[str, float]]:
-        """Most recent sessions first: [(session_date, price), …]."""
+        """Most recent comparable sessions first: [(session_date, price), …].
+
+        Stops at the first break walking backwards — that row's price is real
+        and is kept, but nothing older belongs in the same series.
+        """
         rows = self._conn.execute(
-            "SELECT session_date, price FROM uzse_history WHERE ticker = ? "
+            "SELECT session_date, price, series_break FROM uzse_history WHERE ticker = ? "
             "ORDER BY session_date DESC LIMIT ?",
             (ticker.upper(), limit),
         ).fetchall()
-        return [(r["session_date"], float(r["price"])) for r in rows]
+        history: list[tuple[str, float]] = []
+        for row in rows:
+            history.append((row["session_date"], float(row["price"])))
+            if row["series_break"]:
+                break
+        return history
+
+    def latest_history_point(self, ticker: str) -> tuple[str, float] | None:
+        """The newest close on record, break or not — what a new snapshot is
+        checked against."""
+        row = self._conn.execute(
+            "SELECT session_date, price FROM uzse_history WHERE ticker = ? "
+            "ORDER BY session_date DESC LIMIT 1",
+            (ticker.upper(),),
+        ).fetchone()
+        return (row["session_date"], float(row["price"])) if row else None
 
     def count_tickers(self, chat_id: int) -> int:
         row = self._conn.execute(
